@@ -1,2 +1,2 @@
 <?php
-// Servus
+// Silence is golden.

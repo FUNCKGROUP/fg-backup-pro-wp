@@ -1,44 +1,62 @@
-.fg-backup-wrap {
-    padding: 20px;
+.fg-backup-panel {
+    margin: 20px 0 28px;
+    padding: 18px;
+    border: 1px solid #dcdcde;
+    background: #fff;
 }
 
-.section-title {
-    border-bottom: 1px solid #e1e1e1;
+.fg-backup-run {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.fg-backup-status {
+    margin-top: 16px;
+}
+
+.fg-backup-status[hidden] {
+    display: none;
+}
+
+.fg-backup-status p {
+    margin: 8px 0 0;
+}
+
+.fg-backup-progress {
+    overflow: hidden;
+    height: 8px;
+    background: #dcdcde;
+    border-radius: 8px;
+}
+
+.fg-backup-progress span {
+    display: block;
+    width: 0;
+    height: 100%;
+    background: #2271b1;
+    transition: width .25s ease;
+}
+
+.fg-backup-table td,
+.fg-backup-table th {
+    vertical-align: middle;
+}
+
+.fg-backup-checksum {
+    display: block;
+    margin-top: 4px;
+    width: fit-content;
+    font-size: 11px;
+}
+
+.fg-backup-location {
     margin-top: 20px;
-    margin-bottom: 10px;
-    font-size: 18px;
-    color: #0073aa;
-    font-weight: bold;
 }
 
-.form-table td input[type="text"],
-.form-table td input[type="url"],
-.form-table td input[type="number"],
-.form-table td input[type="password"] {
-    padding: 8px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-}
-
-.form-table tr th {
-    vertical-align: top;
-    text-align: left;
-}
-
-.button-primary {
-    background-color: #0073aa;
-    color: white;
-    border: none;
-    padding: 10px 20px;
-    cursor: pointer;
-    border-radius: 4px;
-}
-
-.notice-success {
-    background-color: #dcf8c6;
-    border-left: 4px solid #28a745;
-    padding: 10px;
+@media (max-width: 782px) {
+    .fg-backup-run > * {
+        width: 100%;
+    }
 }

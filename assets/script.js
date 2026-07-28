@@ -1,59 +1,89 @@
-jQuery(document).ready(function ($) {
-    $('#start-async-backup').on('click', function (e) {
-        e.preventDefault();
+(function ($) {
+    'use strict';
 
-        var $button  = $(this);
-        var $status  = $('#backup-status');
-        var $progress = $('.fg-backup-progress');
+    $(function () {
+        var $button = $('#fg-backup-start');
+        var $type = $('#fg-backup-type');
+        var $status = $('#fg-backup-status');
+        var $statusText = $status.find('p');
+        var $progress = $status.find('.fg-backup-progress span');
 
-        $button.prop('disabled', true).text('Backup wird erstellt…');
-
-        function pollStatus(job_id) {
-            $.post(
-                fgBackupPro.ajaxUrl,
-                {
-                    action: 'fg_backup_check_status',
-                    job_id: job_id,
-                    security: fgBackupPro.nonce
-                },
-                function (res) {
-                    if (res.success) {
-                        var data = res.data;
-                        if (data.status === 'completed') {
-                            $progress.width('100%');
-                            $status.html('<p>✅ Backup abgeschlossen!</p>');
-                            $button.text('Backup erstellt ✅').prop('disabled', false);
-                            location.reload();
-                        } else if (data.status === 'failed') {
-                            $status.html('<p>❌ Backup fehlgeschlagen: ' + data.error + '</p>');
-                            $button.text('Erneut versuchen').prop('disabled', false);
-                        } else {
-                            $progress.width(data.progress + '%');
-                            setTimeout(function () {
-                                pollStatus(job_id);
-                            }, 1000);
-                        }
-                    } else {
-                        $status.html('<p>⚠️ Fehler beim Statuscheck.</p>');
-                    }
-                }
-            );
+        function showMessage(message) {
+            $status.removeAttr('hidden');
+            $statusText.text(message);
         }
 
-        $.post(
-            fgBackupPro.ajaxUrl,
-            {
-                action: 'fg_backup_start_async',
-                security: fgBackupPro.nonce
-            },
-            function (res) {
-                if (res.success) {
-                    pollStatus(res.data.job_id);
-                } else {
-                    $status.html('<p>❌ Konnte Backup nicht starten.</p>');
+        function poll(jobId) {
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_status',
+                security: fgBackupPro.nonce,
+                job_id: jobId
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    showMessage(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
                     $button.prop('disabled', false);
+                    return;
                 }
+
+                var job = response.data;
+                $progress.css('width', Math.max(0, Math.min(100, parseInt(job.progress, 10) || 0)) + '%');
+
+                if (job.status === 'completed') {
+                    showMessage(fgBackupPro.completedText);
+                    window.setTimeout(function () {
+                        window.location.reload();
+                    }, 500);
+                    return;
+                }
+
+                if (job.status === 'failed') {
+                    showMessage(job.error || fgBackupPro.failedText);
+                    $button.prop('disabled', false);
+                    return;
+                }
+
+                showMessage(fgBackupPro.runningText);
+                window.setTimeout(function () {
+                    poll(jobId);
+                }, 1500);
+            }).fail(function () {
+                showMessage(fgBackupPro.failedText);
+                $button.prop('disabled', false);
+            });
+        }
+
+        $button.on('click', function () {
+            $button.prop('disabled', true);
+            $progress.css('width', '0%');
+            showMessage(fgBackupPro.runningText);
+
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_start',
+                security: fgBackupPro.nonce,
+                backup_type: $type.val()
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    showMessage(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    $button.prop('disabled', false);
+                    return;
+                }
+                poll(response.data.job_id);
+            }).fail(function () {
+                showMessage(fgBackupPro.failedText);
+                $button.prop('disabled', false);
+            });
+        });
+
+        if (fgBackupPro.activeJobId) {
+            $button.prop('disabled', true);
+            showMessage(fgBackupPro.runningText);
+            poll(fgBackupPro.activeJobId);
+        }
+
+        $('.fg-backup-delete').on('click', function (event) {
+            if (!window.confirm('Backup wirklich löschen?')) {
+                event.preventDefault();
             }
-        );
+        });
     });
-});
+}(jQuery));

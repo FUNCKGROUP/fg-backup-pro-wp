@@ -1,19 +1,37 @@
 <?php
 
+defined('ABSPATH') || exit;
+
 class FgBackup_Cleanup {
 
     public static function rotate_backups() {
-        $max_backups = intval(get_option('fg_backup_rotation', 5));
+        $maximum = max(1, min(100, (int) get_option('fg_backup_rotation', 5)));
         $backups = FgBackup_Backup::list_backups();
 
-        usort($backups, function($a, $b) {
-            return $b['date'] <=> $a['date'];
-        });
+        if (count($backups) <= $maximum) {
+            return;
+        }
 
-        if (count($backups) > $max_backups) {
-            $to_delete = array_slice($backups, $max_backups);
-            foreach ($to_delete as $backup) {
-                unlink($backup['path']);
+        foreach (array_slice($backups, $maximum) as $backup) {
+            FgBackup_Backup::delete_backup($backup['name']);
+        }
+    }
+
+    public static function clean_old_jobs() {
+        global $wpdb;
+
+        $names = $wpdb->get_col(
+            "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE 'fg_backup_job_%'"
+        );
+
+        foreach ((array) $names as $name) {
+            $job = get_option($name, []);
+            $finished = isset($job['finished_at']) ? (int) $job['finished_at'] : 0;
+            $started = isset($job['started_at']) ? (int) $job['started_at'] : 0;
+            $reference = $finished ?: $started;
+
+            if ($reference && $reference < time() - (7 * DAY_IN_SECONDS)) {
+                delete_option($name);
             }
         }
     }

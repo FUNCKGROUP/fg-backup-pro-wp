@@ -1,76 +1,100 @@
-<?php
-$backups = FgBackup_Backup::list_backups();
-$message = isset($_GET['backup']) && $_GET['backup'] === 'success'
-    ? 'Backup wurde erfolgreich erstellt.'
-    : '';
-?>
+<?php defined('ABSPATH') || exit; ?>
 
-<div class="wrap">
-    <h1>Backup Management</h1>
-
-    <?php if ($message): ?>
-        <div class="notice notice-success is-dismissible">
-            <p><?php echo esc_html($message); ?></p>
-        </div>
-    <?php endif; ?>
-
-    <form id="fg-backup-form" method="post" action="<?php echo esc_url(admin_url('admin-ajax.php')); ?>">
-        <?php wp_nonce_field('fg_backup_nonce', 'security'); ?>
-        <input type="hidden" name="action" value="fg_backup_start_async">
-
-        <select name="backup_type">
-            <option value="full">Volles Backup (Dateien + DB)</option>
-            <option value="db">Nur Datenbank-Backup</option>
+<div class="fg-backup-panel">
+    <div class="fg-backup-run">
+        <label for="fg-backup-type"><strong><?php esc_html_e('Neues Backup', 'fg-backup-pro'); ?></strong></label>
+        <select id="fg-backup-type">
+            <option value="full"><?php esc_html_e('Vollständig (Dateien und Datenbank)', 'fg-backup-pro'); ?></option>
+            <option value="db"><?php esc_html_e('Nur Datenbank', 'fg-backup-pro'); ?></option>
         </select>
-        <br><br>
-
-        <label>
-            <input type="checkbox" name="send_email" value="1">
-            DB per E-Mail schicken
-        </label>
-        <br><br>
-
-        <button id="start-async-backup" type="button" class="button button-primary">
-            Backup starten
+        <button type="button" class="button button-primary" id="fg-backup-start" <?php disabled((bool) $active_job); ?>>
+            <?php esc_html_e('Backup erstellen', 'fg-backup-pro'); ?>
         </button>
-    </form>
+    </div>
 
-    <h2>Vorhandene Backups</h2>
-    <?php if (!empty($backups)): ?>
-        <table class="wp-list-table widefat fixed striped">
-            <thead>
-                <tr>
-                    <th>Datei</th>
-                    <th>Datum</th>
-                    <th>Größe</th>
-                    <th>Aktionen</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($backups as $backup): ?>
-                    <tr>
-                        <td><?php echo esc_html($backup['name']); ?></td>
-                        <td><?php echo esc_html($backup['date']); ?></td>
-                        <td><?php echo esc_html($backup['size']); ?></td>
-                        <td>
-                            <a href="<?php echo content_url('/backups/' . urlencode($backup['name'])); ?>"
-                               class="button button-small">
-                                Download
-                            </a>
-                            <a href="<?php echo admin_url('admin-post.php?action=fg_delete_backup&file=' . urlencode($backup['name'])); ?>"
-                               onclick="return confirm('Backup wirklich löschen?')"
-                               class="button button-small button-link-delete">
-                                Löschen
-                            </a>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-    <?php else: ?>
-        <p>Keine lokalen Backups gefunden.</p>
-    <?php endif; ?>
-
-    <div id="backup-status" class="fg-backup-status"></div>
-    <div class="fg-backup-progress"></div>
+    <div id="fg-backup-status" class="fg-backup-status" <?php echo $active_job ? '' : 'hidden'; ?>
+        <div class="fg-backup-progress"><span style="width: <?php echo $active_job ? esc_attr((int) $active_job['progress']) : 0; ?>%"></span></div>
+        <p><?php echo $active_job ? esc_html__('Ein Backup läuft bereits.', 'fg-backup-pro') : ''; ?></p>
+    </div>
 </div>
+
+<h2><?php esc_html_e('Lokale Backups', 'fg-backup-pro'); ?></h2>
+
+<?php if (!$backups) : ?>
+    <p><?php esc_html_e('Noch keine Backups vorhanden.', 'fg-backup-pro'); ?></p>
+<?php else : ?>
+    <table class="widefat striped fg-backup-table">
+        <thead>
+        <tr>
+            <th><?php esc_html_e('Datei', 'fg-backup-pro'); ?></th>
+            <th><?php esc_html_e('Inhalt', 'fg-backup-pro'); ?></th>
+            <th><?php esc_html_e('Größe', 'fg-backup-pro'); ?></th>
+            <th><?php esc_html_e('Erstellt', 'fg-backup-pro'); ?></th>
+            <th><?php esc_html_e('Aktion', 'fg-backup-pro'); ?></th>
+        </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($backups as $backup) :
+            $download_url = wp_nonce_url(
+                add_query_arg([
+                    'action' => 'fg_backup_download',
+                    'file' => $backup['name'],
+                ], admin_url('admin-post.php')),
+                'fg_backup_download_' . $backup['name']
+            );
+            $delete_url = wp_nonce_url(
+                add_query_arg([
+                    'action' => 'fg_backup_delete',
+                    'file' => $backup['name'],
+                ], admin_url('admin-post.php')),
+                'fg_backup_delete_' . $backup['name']
+            );
+            ?>
+            <tr>
+                <td>
+                    <strong><?php echo esc_html($backup['name']); ?></strong>
+                    <?php if ($backup['checksum']) : ?>
+                        <code class="fg-backup-checksum" title="SHA-256"><?php echo esc_html(substr($backup['checksum'], 0, 16)); ?>…</code>
+                    <?php endif; ?>
+                </td>
+                <td><?php echo $backup['type'] === 'full' ? esc_html__('Dateien + Datenbank', 'fg-backup-pro') : esc_html__('Datenbank', 'fg-backup-pro'); ?></td>
+                <td><?php echo esc_html($backup['size']); ?></td>
+                <td><?php echo esc_html($backup['date']); ?></td>
+                <td>
+                    <a href="<?php echo esc_url($download_url); ?>"><?php esc_html_e('Herunterladen', 'fg-backup-pro'); ?></a>
+                    <span aria-hidden="true"> · </span>
+                    <a href="<?php echo esc_url($delete_url); ?>" class="fg-backup-delete"><?php esc_html_e('Löschen', 'fg-backup-pro'); ?></a>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+<?php endif; ?>
+
+<?php if (!empty($history)) : ?>
+    <h2><?php esc_html_e('Letzte Läufe', 'fg-backup-pro'); ?></h2>
+    <table class="widefat striped fg-backup-table">
+        <thead>
+        <tr>
+            <th><?php esc_html_e('Status', 'fg-backup-pro'); ?></th>
+            <th><?php esc_html_e('Typ', 'fg-backup-pro'); ?></th>
+            <th><?php esc_html_e('Start', 'fg-backup-pro'); ?></th>
+            <th><?php esc_html_e('Dauer', 'fg-backup-pro'); ?></th>
+            <th><?php esc_html_e('Ergebnis', 'fg-backup-pro'); ?></th>
+        </tr>
+        </thead>
+        <tbody>
+        <?php foreach (array_slice((array) $history, 0, 10) as $entry) :
+            $duration = max(0, (int) $entry['finished_at'] - (int) $entry['started_at']);
+            ?>
+            <tr>
+                <td><?php echo $entry['status'] === 'completed' ? esc_html__('Erfolgreich', 'fg-backup-pro') : esc_html__('Fehlgeschlagen', 'fg-backup-pro'); ?></td>
+                <td><?php echo $entry['type'] === 'full' ? esc_html__('Vollständig', 'fg-backup-pro') : esc_html__('Datenbank', 'fg-backup-pro'); ?></td>
+                <td><?php echo esc_html(wp_date('d.m.Y H:i', (int) $entry['started_at'])); ?></td>
+                <td><?php echo esc_html(human_time_diff((int) $entry['started_at'], (int) $entry['finished_at'])); ?></td>
+                <td><?php echo !empty($entry['error']) ? esc_html($entry['error']) : esc_html($entry['file']); ?></td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+<?php endif; ?>

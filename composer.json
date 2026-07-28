@@ -1,5 +1,37 @@
 {
-    "require": {
-        "aws/aws-sdk-php": "^3.260"
+  "name": "funckgroup/fg-backup-pro-wp",
+  "description": "Sicheres Backup-Plugin von FUNCKGROUP für WordPress",
+  "type": "wordpress-plugin",
+  "license": "proprietary",
+  "homepage": "https://github.com/FUNCKGROUP/fg-backup-pro-wp",
+  "support": {
+    "issues": "https://github.com/FUNCKGROUP/fg-backup-pro-wp/issues",
+    "source": "https://github.com/FUNCKGROUP/fg-backup-pro-wp"
+  },
+  "repositories": [
+    {
+      "type": "vcs",
+      "url": "git@github.com:funckgroup/fg-core-wp.git"
     }
+  ],
+  "require": {
+    "php": ">=7.4"
+  },
+  "require-dev": {
+    "funckgroup/fg-core": "^1.1"
+  },
+  "scripts": {
+    "fg-core:sync": "@php vendor/funckgroup/fg-core/tools/sync-fg-core.php",
+    "post-install-cmd": [
+      "@fg-core:sync"
+    ],
+    "post-update-cmd": [
+      "@fg-core:sync"
+    ],
+    "audit": "@composer audit"
+  },
+  "config": {
+    "sort-packages": true,
+    "optimize-autoloader": true
+  }
 }

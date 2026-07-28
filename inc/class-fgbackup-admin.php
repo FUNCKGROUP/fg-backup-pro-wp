@@ -1,113 +1,261 @@
 <?php
 
+defined('ABSPATH') || exit;
+
 class FgBackup_Admin {
 
     public static function init() {
-        add_action('admin_menu', [__CLASS__, 'register_admin_page']);
-        add_action('admin_post_fg_run_backup', [__CLASS__, 'handle_backup_request']);
-        add_action('admin_post_fg_delete_backup', [__CLASS__, 'handle_delete_request']);
+        add_action('admin_init', [__CLASS__, 'register_settings']);
         add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_assets']);
-        add_action('wp_ajax_fg_backup_check_status', [__CLASS__, 'ajax_check_status']);
-        add_action('wp_ajax_fg_backup_start_async', [__CLASS__, 'ajax_start_async']);
+        add_action('wp_ajax_fg_backup_start', [__CLASS__, 'ajax_start']);
+        add_action('wp_ajax_fg_backup_status', [__CLASS__, 'ajax_status']);
+        add_action('admin_post_fg_backup_download', [__CLASS__, 'download']);
+        add_action('admin_post_fg_backup_delete', [__CLASS__, 'delete']);
     }
 
-    public static function register_admin_page() {
-        $icon = 'data:image/svg+xml;base64,' . base64_encode('
-                    <svg width="20" height="20" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M57.9 18.1C55.3 15.5 52 13 48 13H16C12 13 8 13 8 17V55C8 59 12 59 16 59H56C60 59 60 55 60 51C60 47 56 43 52 43H12L20 35L24.5 39.5L33 31L37.5 35.5L46 18.1H57.9Z" fill="#007cba"/>
-                    </svg>');
-        add_menu_page(
-            __('FG Backup Pro', 'fg-backup-pro'),
-            __('FG Backup Pro', 'fg-backup-pro'),
-            'manage_options',
-            'fg-backup-pro',
-            [__CLASS__, 'render_main_page'],
-            $icon,
-            59
-        );
-        add_submenu_page(
-            'fg-backup-pro',
-            __('Einstellungen', 'fg-backup-pro'),
-            __('Einstellungen', 'fg-backup-pro'),
-            'manage_options',
-            'fg-backup-pro-settings',
-            [__CLASS__, 'render_settings_page']
-        );
+    public static function activate() {
+        self::install_defaults();
+        self::run_upgrade();
+        FgBackup_Cron::reschedule();
     }
 
-    public static function enqueue_assets($hook) {
-        if (!in_array($hook, ['toplevel_page_fg-backup-pro', 'fg-backup_page_fg-backup-settings'])) {
+    public static function deactivate() {
+        FgBackup_Cron::deactivate();
+    }
+
+    public static function maybe_upgrade() {
+        if (get_option('fg_backup_version') !== FG_BACKUP_VERSION) {
+            self::run_upgrade();
+        }
+    }
+
+    private static function run_upgrade() {
+        self::install_defaults();
+        FgBackup_Storage::ensure();
+        FgBackup_Storage::migrate_legacy_backups();
+        self::remove_legacy_remote_credentials();
+        FgBackup_Cleanup::clean_old_jobs();
+        update_option('fg_backup_version', FG_BACKUP_VERSION, false);
+        FgBackup_Cron::reschedule();
+    }
+
+    private static function install_defaults() {
+        $defaults = [
+            'fg_backup_type' => 'full',
+            'fg_backup_schedule' => 'disabled',
+            'fg_backup_hour' => 2,
+            'fg_backup_rotation' => 5,
+            'fg_backup_notifications' => 0,
+            'fg_backup_exclusions' => '',
+        ];
+
+        foreach ($defaults as $name => $value) {
+            if (get_option($name, null) === null) {
+                add_option($name, $value, '', false);
+            }
+        }
+    }
+
+    private static function remove_legacy_remote_credentials() {
+        $legacy_options = [
+            'fg_backup_targets',
+            'fg_backup_dropbox_token',
+            'fg_backup_gdrive_token',
+            'fg_backup_s3_key',
+            'fg_backup_s3_secret',
+            'fg_backup_s3_region',
+            'fg_backup_s3_bucket',
+            'fg_backup_s3_prefix',
+            'fg_backup_s3c_key',
+            'fg_backup_s3c_secret',
+            'fg_backup_s3c_endpoint',
+            'fg_backup_s3c_bucket',
+            'fg_backup_s3c_prefix',
+            'fg_backup_ftp_host',
+            'fg_backup_ftp_port',
+            'fg_backup_ftp_user',
+            'fg_backup_ftp_pass',
+            'fg_backup_ftp_dir',
+            'fg_backup_webdav_url',
+            'fg_backup_webdav_user',
+            'fg_backup_webdav_pass',
+            'fg_backup_onedrive_token',
+        ];
+
+        foreach ($legacy_options as $option) {
+            delete_option($option);
+        }
+    }
+
+    public static function register_settings() {
+        register_setting('fg_backup_settings', 'fg_backup_type', [
+            'type' => 'string',
+            'sanitize_callback' => [__CLASS__, 'sanitize_type'],
+            'default' => 'full',
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_schedule', [
+            'type' => 'string',
+            'sanitize_callback' => [__CLASS__, 'sanitize_schedule'],
+            'default' => 'disabled',
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_hour', [
+            'type' => 'integer',
+            'sanitize_callback' => [__CLASS__, 'sanitize_hour'],
+            'default' => 2,
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_rotation', [
+            'type' => 'integer',
+            'sanitize_callback' => [__CLASS__, 'sanitize_rotation'],
+            'default' => 5,
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_notifications', [
+            'type' => 'boolean',
+            'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'],
+            'default' => 0,
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_exclusions', [
+            'type' => 'string',
+            'sanitize_callback' => 'sanitize_textarea_field',
+            'default' => '',
+        ]);
+    }
+
+    public static function sanitize_type($value) {
+        return in_array($value, ['full', 'db'], true) ? $value : 'full';
+    }
+
+    public static function sanitize_schedule($value) {
+        return in_array($value, ['disabled', 'daily', 'weekly', 'monthly'], true) ? $value : 'disabled';
+    }
+
+    public static function sanitize_hour($value) {
+        return max(0, min(23, (int) $value));
+    }
+
+    public static function sanitize_rotation($value) {
+        $allowed = [3, 5, 10, 20];
+        $value = (int) $value;
+        return in_array($value, $allowed, true) ? $value : 5;
+    }
+
+    public static function sanitize_checkbox($value) {
+        return empty($value) ? 0 : 1;
+    }
+
+    public static function enqueue_assets() {
+        if (!is_admin() || empty($_GET['page']) || sanitize_key(wp_unslash($_GET['page'])) !== 'fg-backup-pro') {
             return;
         }
-        wp_enqueue_style('fg-backup-pro-style', FG_BACKUP_URL . 'assets/style.css');
-        wp_enqueue_script('fg-backup-pro-script', FG_BACKUP_URL . 'assets/script.js', ['jquery'], null, true);
-        wp_localize_script('fg-backup-pro-script', 'fgBackupPro', [
+
+        wp_enqueue_style('fg-backup-pro', FG_BACKUP_URL . 'assets/style.css', [], FG_BACKUP_VERSION);
+        wp_enqueue_script('fg-backup-pro', FG_BACKUP_URL . 'assets/script.js', ['jquery'], FG_BACKUP_VERSION, true);
+        $active_job = FgBackup_Async::get_active_job();
+
+        wp_localize_script('fg-backup-pro', 'fgBackupPro', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
-            'nonce'   => wp_create_nonce('fg_backup_nonce'),
+            'nonce' => wp_create_nonce('fg_backup_ajax'),
+            'runningText' => __('Backup läuft …', 'fg-backup-pro'),
+            'failedText' => __('Backup fehlgeschlagen.', 'fg-backup-pro'),
+            'completedText' => __('Backup abgeschlossen.', 'fg-backup-pro'),
+            'activeJobId' => is_array($active_job) && !empty($active_job['id']) ? $active_job['id'] : '',
         ]);
     }
 
     public static function render_main_page() {
-        include_once FG_BACKUP_DIR . 'views/admin-main.php';
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $backups = FgBackup_Backup::list_backups();
+        $history = get_option('fg_backup_history', []);
+        $active_job = FgBackup_Async::get_active_job();
+        include FG_BACKUP_DIR . 'views/admin-main.php';
     }
 
     public static function render_settings_page() {
-        include_once FG_BACKUP_DIR . 'views/admin-settings.php';
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        include FG_BACKUP_DIR . 'views/admin-settings.php';
     }
 
-    public static function handle_backup_request() {
+    public static function ajax_start() {
         if (!current_user_can('manage_options')) {
-            wp_die(__('Unauthorized user', 'fg-backup-pro'), 403);
+            wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
         }
-        check_admin_referer('fg_backup_nonce', 'security');
+        check_ajax_referer('fg_backup_ajax', 'security');
 
-        $type       = sanitize_text_field($_POST['backup_type'] ?? 'full');
-        $send_email = !empty($_POST['send_email']);
-        $targets    = array_map('sanitize_text_field', $_POST['targets'] ?? []);
+        $type = isset($_POST['backup_type']) ? self::sanitize_type(wp_unslash($_POST['backup_type'])) : 'full';
+        $job_id = FgBackup_Async::queue_backup($type, 'manual');
 
-        FgBackup_Async::queue_backup($type, $targets);
-
-        wp_redirect(admin_url('admin.php?page=fg-backup-pro&backup=success'));
-        exit;
-    }
-
-    public static function handle_delete_request() {
-        if (!current_user_can('manage_options')) {
-            wp_die(__('Unauthorized user', 'fg-backup-pro'), 403);
+        if (is_wp_error($job_id)) {
+            wp_send_json_error(['message' => $job_id->get_error_message()]);
         }
-        check_admin_referer('fg_delete_backup');
-
-        $file = isset($_GET['file']) ? sanitize_file_name(urldecode($_GET['file'])) : '';
-        FgBackup_Backup::delete_backup($file);
-
-        wp_redirect(admin_url('admin.php?page=fg-backup-pro'));
-        exit;
-    }
-
-    public static function ajax_check_status() {
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error(['message' => 'Unauthorized']);
-        }
-        check_ajax_referer('fg_backup_nonce', 'security');
-
-        $job_id = sanitize_key($_POST['job_id'] ?? '');
-        $status = FgBackup_Async::get_status($job_id);
-
-        if (!$status) {
-            wp_send_json_error(['message' => 'Job nicht gefunden']);
-        }
-        wp_send_json_success($status);
-    }
-
-    public static function ajax_start_async() {
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error(['message' => 'Unauthorized']);
-        }
-        check_ajax_referer('fg_backup_nonce', 'security');
-
-        error_log("FG Backup Pro: AJAX Start Async Triggered");
-        $job_id = FgBackup_Async::queue_backup('full', ['local']);
 
         wp_send_json_success(['job_id' => $job_id]);
+    }
+
+    public static function ajax_status() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
+        }
+        check_ajax_referer('fg_backup_ajax', 'security');
+
+        $job_id = isset($_POST['job_id']) ? sanitize_key(wp_unslash($_POST['job_id'])) : '';
+        $job = FgBackup_Async::get_status($job_id);
+
+        if (!is_array($job)) {
+            wp_send_json_error(['message' => __('Backup-Job nicht gefunden.', 'fg-backup-pro')]);
+        }
+
+        wp_send_json_success([
+            'status' => $job['status'],
+            'progress' => isset($job['progress']) ? (int) $job['progress'] : 0,
+            'error' => isset($job['error']) ? $job['error'] : '',
+        ]);
+    }
+
+    public static function download() {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('Keine Berechtigung.', 'fg-backup-pro'), 403);
+        }
+
+        $file = isset($_GET['file']) ? sanitize_file_name(wp_unslash($_GET['file'])) : '';
+        check_admin_referer('fg_backup_download_' . $file);
+        $path = FgBackup_Backup::get_backup_path($file);
+
+        if (!$path) {
+            wp_die(esc_html__('Backup nicht gefunden.', 'fg-backup-pro'), 404);
+        }
+
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+
+        nocache_headers();
+        header('Content-Type: application/octet-stream');
+        $download_name = str_replace(['\r', '\n', '"'], '', basename($path));
+        header('Content-Disposition: attachment; filename="' . $download_name . '"; filename*=UTF-8\'\'' . rawurlencode($download_name));
+        header('Content-Length: ' . filesize($path));
+        header('X-Content-Type-Options: nosniff');
+
+        $handle = fopen($path, 'rb');
+        if ($handle) {
+            fpassthru($handle);
+            fclose($handle);
+        }
+        exit;
+    }
+
+    public static function delete() {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('Keine Berechtigung.', 'fg-backup-pro'), 403);
+        }
+
+        $file = isset($_GET['file']) ? sanitize_file_name(wp_unslash($_GET['file'])) : '';
+        check_admin_referer('fg_backup_delete_' . $file);
+        FgBackup_Backup::delete_backup($file);
+
+        wp_safe_redirect(admin_url('admin.php?page=fg-backup-pro&tab=backups'));
+        exit;
     }
 }

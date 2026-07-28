@@ -1,149 +1,77 @@
-# FG Backup Pro: WordPress Backup Plugin
+# FG Backup Pro
 
-Ein leistungsstarkes Backup-Plugin für WordPress mit asynchroner Erstellung, Upload zu verschiedenen Zielen, automatischer Planung und Rotation.
+FG Backup Pro erstellt lokale WordPress-Sicherungen im geschützten FUNCKGROUP-Verzeichnis und wird über FG Core im WordPress-Admin eingebunden.
 
-## ✅ Features
+## Version 1.1.0
 
-- Volles Backup (Dateien + Datenbank) oder nur DB
-- Asynchrone Ausführung – kein Timeout bei Shared Hosting
-- Multi-Ziel-Upload:
-  - Dropbox
-  - Google Drive
-  - Amazon S3
-  - S3-kompatible Anbieter (Wasabi, B2, MinIO)
-  - SFTP / FTP
-  - WebDAV (Nextcloud, ownCloud)
-  - Microsoft OneDrive
-- Automatische Rotation von Backups (3/5/10/20)
-- WP-Cron-basierte Planung (täglich/wöchentlich/monatlich)
-- Direkter Download & Löschfunktion für lokale Backups
+- vollständige Sicherung von Dateien und Datenbank
+- reines Datenbank-Backup
+- asynchrone Verarbeitung in kleinen WP-Cron-Schritten
+- Prüfung des fertigen Backups und SHA-256-Prüfsumme
+- geschützter Download über WordPress
+- automatische Rotation und Job-Historie
+- tägliche, wöchentliche oder monatliche Planung
+- Erkennung klassischer WordPress- und Bedrock-Strukturen
+- Integration in FG Core 1.1.3
+- Unterstützung durch FG GitHub Update
 
-## ⚙️ Installation
+Remote-Speicherziele sind für Version 2 vorgesehen.
 
-### Voraussetzungen
-- WordPress 5.0+
-- PHP 7.2+
+## Voraussetzungen
 
-### Option 1: Mit Composer (empfohlen)
+- WordPress 5.8 oder neuer
+- PHP 7.4 oder neuer
+- `ZipArchive` für vollständige Backups
+- Schreibzugriff auf `wp-content/.fg-private/`
 
-Falls du Zugriff auf einen Server mit Composer hast:
+Datenbank-Backups funktionieren auch ohne `ZipArchive`.
 
-Wechsel in dein Plugin-Verzeichnis:
+## Speicherort
 
-- Wechsel in dein Plugin-Verzeichnis:
+```text
+wp-content/.fg-private/fg-backup-pro/
+├── backups/
+└── temporary/
+```
 
-   cd wp-content/plugins/fg-backup
+FG Backup Pro ergänzt fehlende Schutzdateien, überschreibt aber keine vorhandenen Schutzdateien in `.fg-private`.
 
-Führe aus:
+Alte lokale Sicherungen aus `wp-content/fg-backup-pro/` oder `wp-content/backups/` werden beim Update in den neuen Ordner verschoben.
 
-   composer require aws/aws-sdk-php
+## Composer
 
-Das installiert das AWS SDK und alle Abhängigkeiten.
+Composer liegt im Root des Plugins und dient der Entwicklung sowie der Synchronisierung von FG Core.
 
----
+```bash
+composer update funckgroup/fg-core
+composer audit
+```
 
-### Option 2: Ohne Composer (Shared Hosting)
+Der eingebettete Runtime-Core liegt unter:
 
-Wenn der Zielserver keinen Composer unterstützt:
+```text
+includes/fg-core/
+```
 
-1. Lade das [AWS SDK v3 für PHP](https://github.com/aws/aws-sdk-php/releases) herunter.
-2. Entpacke es lokal.
-3. Verschiebe den Inhalt des Ordners `aws-sdk-php/src/` nach `/wp-content/plugins/fg-backup/vendor/aws/`.
-4. Erstelle eine Datei namens `autoload.php` im Verzeichnis `/vendor/`.
-5. Füge die notwendigen Klassen manuell hinzu oder verwende Lightweight-Alternativen.
+Auf der WordPress-Installation wird Composer nicht benötigt.
 
----
+## Standardmäßig ausgeschlossene Verzeichnisse
 
-> 💡 Tipp: Für manuelle Installation ohne Composer solltest du entweder:
-> - Eine minimierte Version des benötigten SDKs einbinden
-> - ODER alternative Uploadmethoden nutzen, z. B. rein über HTTP oder ZipArchive
+- `.git`
+- `.svn`
+- `node_modules`
+- WordPress-Cache- und Upgrade-Verzeichnisse
+- bekannte Backup-Verzeichnisse anderer Plugins
+- `wp-content/.fg-private`
 
----
+Zusätzliche Pfadteile können in den Einstellungen zeilenweise eingetragen werden.
 
-## 🔄 Cron-Jobs
+## GitHub Update
 
-Das Plugin nutzt WP-Cron für geplante Backups. Standardmäßig wird täglich um 02:00 Uhr ein Backup gestartet.
+Repository:
 
-Beim ersten Aufruf des Plugins wird der erste Cron-Job angelegt.
+```text
+https://github.com/FUNCKGROUP/fg-backup-pro-wp
+```
 
----
-
-## 📂 Backup-Verzeichnis
-
-Alle Backups werden im Ordner `/wp-content/backups/` abgelegt.
-
-> ⚠️ Sicherheitshinweis: Blockiere diesen Ordner via `.htaccess` oder Nginx-Konfiguration, damit er nicht öffentlich zugänglich ist.
-
----
-
-## 📎 Supportierte Upload-Ziele
-
-| Ziel | Erforderliche Angaben |
-|------|------------------------|
-| Dropbox | Access Token |
-| Google Drive | Access Token |
-| Amazon S3 | S3 Key, Secret, Bucket, Region |
-| S3-kompatibel | Key, Secret, Bucket, Endpoint |
-| SFTP | Host, Port, Benutzer, Passwort, Zielverzeichnis |
-| WebDAV | URL, Benutzer, Passwort |
-| OneDrive | Microsoft Access Token |
-
----
-
-## 📦 Einstellungen
-
-Du findest das Plugin im Hauptmenü unter:
-
-🔧 Admin-Menü → Backups → Einstellungen
-
-Dort kannst du:
-- Backup-Typ auswählen
-- Upload-Ziele konfigurieren
-- E-Mail-Benachrichtigung aktivieren
-- Die maximale Anzahl an Backups festlegen (Rotation)
-
----
-
-## 🧰 Enthalten sind
-
-/includes/
-├── class-fgbackup-admin.php
-├── class-fgbackup-async.php
-├── class-fgbackup-backup.php
-├── class-fgbackup-cleanup.php
-├── class-fgbackup-cron.php
-├── class-fgbackup-notifications.php
-└── class-fgbackup-target.php
-
-/targets/
-├── class-fgbackup-dropbox.php
-├── class-fgbackup-google-drive.php
-├── class-fgbackup-s3.php
-├── class-fgbackup-s3-compatible.php
-├── class-fgbackup-sftp.php
-├── class-fgbackup-webdav.php
-└── class-fgbackup-onedrive.php
-
-/templates/
-├── admin-main.php
-└── admin-settings.php
-
-/assets/
-├── style.css
-└── script.js
-
----
-
-## 📌 Templates
-
-admin-main.php: Hauptseite zur Backup-Erstellung  
-admin-settings.php: Unterseite für Ziele, Zeitplanung und Rotation
-
----
-
-## 🎨 Assets
-
-✅ CSS (`style.css`) für Menü und Statusbalken  
-✅ JavaScript (`script.js`) für AJAX-Fortschrittsanzeige  
-✅ SVG-Icon (`icon-backup.svg`) für eigenständiges Menüsymbol
-
+Der Release-Ordner muss `fg-backup-pro-wp` heißen und die Hauptdatei `fg-backup-pro.php` enthalten.
