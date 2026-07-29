@@ -4,7 +4,7 @@ defined('ABSPATH') || exit;
 
 class FgBackup_Backup {
 
-    const DB_ROWS_PER_CHUNK = 500;
+    const DB_ROWS_PER_CHUNK = 1000;
     const FILES_PER_CHUNK = 150;
 
     public static function supports_zip() {
@@ -74,8 +74,9 @@ class FgBackup_Backup {
 
         $base = strtr(self::sanitize_filename_pattern($pattern), $replacements);
         $base = str_replace('%', '', $base);
-        $base = sanitize_file_name($base);
-        $base = trim($base, " .-_\t\n\r\0\x0B");
+        $base = preg_replace('/[^A-Za-z0-9._-]+/u', '-', (string) $base);
+        $base = preg_replace('/\.{2,}/', '.', (string) $base);
+        $base = trim((string) $base, " .-_\t\n\r\0\x0B");
         if ($base === '') {
             $base = 'fg-' . $type . '-' . wp_date('Ymd-His', $timestamp);
         }
@@ -113,16 +114,54 @@ class FgBackup_Backup {
 
     public static function unique_backup_path($file_name) {
         $directory = FgBackup_Storage::get_backup_dir();
-        $file_name = sanitize_file_name($file_name);
+        $file_name = self::sanitize_backup_filename($file_name);
+
         if ($file_name === '') {
             throw new RuntimeException(__('Der Backup-Dateiname ist ungültig.', 'fg-backup-pro'));
         }
 
         if (file_exists($directory . $file_name)) {
-            $file_name = wp_unique_filename($directory, $file_name);
+            $extension = self::known_backup_extension($file_name);
+            $base = substr($file_name, 0, -strlen($extension));
+            $number = 2;
+
+            do {
+                $candidate = $base . '-' . $number . $extension;
+                $number++;
+            } while (file_exists($directory . $candidate));
+
+            $file_name = $candidate;
         }
 
         return $directory . $file_name;
+    }
+
+    private static function known_backup_extension($file_name) {
+        foreach (['.sql.zip', '.sql.gz', '.tgz', '.zip', '.sql'] as $candidate) {
+            if (substr(strtolower((string) $file_name), -strlen($candidate)) === $candidate) {
+                return $candidate;
+            }
+        }
+
+        return '';
+    }
+
+    private static function sanitize_backup_filename($file_name) {
+        $file_name = basename(str_replace('\\', '/', (string) $file_name));
+        $file_name = preg_replace('/[\x00-\x1F\x7F]+/u', '', $file_name);
+
+        $extension = self::known_backup_extension($file_name);
+        if ($extension === '') {
+            return '';
+        }
+
+        $file_name = substr($file_name, 0, -strlen($extension));
+
+        $base = preg_replace('/[^A-Za-z0-9._-]+/u', '-', (string) $file_name);
+        $base = preg_replace('/\.{2,}/', '.', (string) $base);
+        $base = trim((string) $base, " .-_\t\n\r\0\x0B");
+
+        return $base !== '' ? $base . strtolower($extension) : '';
     }
 
     public static function get_source_root() {
@@ -243,6 +282,7 @@ class FgBackup_Backup {
             ));
         }
 
+        $buffer = '';
         foreach ($rows as $row) {
             $columns = [];
             $values = [];
@@ -252,8 +292,16 @@ class FgBackup_Backup {
                 $values[] = self::sql_value($value);
             }
 
-            $line = "INSERT INTO {$quoted_table} (" . implode(', ', $columns) . ') VALUES (' . implode(', ', $values) . ");\n";
-            self::append_to_file($file_path, $line, true);
+            $buffer .= "INSERT INTO {$quoted_table} (" . implode(', ', $columns) . ') VALUES (' . implode(', ', $values) . ");\n";
+
+            if (strlen($buffer) >= 1024 * 1024) {
+                self::append_to_file($file_path, $buffer, true);
+                $buffer = '';
+            }
+        }
+
+        if ($buffer !== '') {
+            self::append_to_file($file_path, $buffer, true);
         }
 
         return [
@@ -926,7 +974,7 @@ class FgBackup_Backup {
                 'mtime' => $mtime,
                 'date' => wp_date('d.m.Y H:i', $mtime),
                 'checksum' => !empty($history['checksum']) ? (string) $history['checksum'] : '',
-                'verified' => !empty($history['checksum']) && (!isset($history['status']) || $history['status'] === 'completed'),
+                'verified' => !empty($history) && (!isset($history['status']) || $history['status'] === 'completed'),
             ];
         }
 

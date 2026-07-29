@@ -8,8 +8,9 @@ FG Backup Pro erstellt lokale WordPress-Sicherungen im geschützten FUNCKGROUP-V
 - Datenbank-Backup als SQL, SQL.GZ oder SQL.ZIP
 - frei definierbares Dateinamensmuster mit Platzhaltern
 - sichtbarer Live-Status mit Arbeitsschritt und Fortschritt
+- laufende Sicherungen werden zusätzlich in der WordPress-Adminleiste angezeigt
 - laufende Backups können kontrolliert abgebrochen werden
-- asynchrone Verarbeitung in kleinen WP-Cron-Schritten
+- asynchrone Verarbeitung in kleinen, aktiv angestoßenen WP-Cron-Schritten
 - strukturelle Prüfung des fertigen Backups
 - geschützter Download über WordPress
 - automatische Rotation und Job-Historie
@@ -60,7 +61,7 @@ Die passende Dateiendung wird automatisch ergänzt.
 
 ## Status
 
-Ein Backup gilt erst als abgeschlossen, wenn das Archiv beziehungsweise die SQL-Sicherung lesbar ist, die erwarteten Pflichtdateien enthält und in den endgültigen Backup-Ordner verschoben wurde. Während des Laufs werden Arbeitsschritt, Detail und Fortschritt angezeigt. Ein laufender Job kann über `Abbrechen` beendet werden; temporäre Dateien werden anschließend entfernt. Danach erscheint der Eintrag mit dem Status `Abgeschlossen` oder `Abgebrochen`. Die Prüfung kontrolliert die Archivstruktur und die Pflichtinhalte; sie vergleicht nicht jede einzelne Quelldatei bytegenau.
+Ein Backup gilt erst als abgeschlossen, wenn das Archiv beziehungsweise die SQL-Sicherung lesbar ist, die erwarteten Pflichtdateien enthält und in den endgültigen Backup-Ordner verschoben wurde. Während des Laufs werden Arbeitsschritt, Detail und Fortschritt auf der Backup-Seite sowie der aktuelle Fortschritt in der WordPress-Adminleiste angezeigt. Ein laufender Job kann über `Abbrechen` beendet werden; ein noch nicht aktiver Arbeitsschritt wird sofort abgebrochen, während ein bereits laufender Arbeitsschritt kontrolliert ausläuft. Temporäre Dateien werden anschließend entfernt. Danach erscheint der Eintrag mit dem Status `Abgeschlossen` oder `Abgebrochen`. Die Prüfung kontrolliert die Archivstruktur und die Pflichtinhalte; sie vergleicht nicht jede einzelne Quelldatei bytegenau.
 
 ## Speicherort
 

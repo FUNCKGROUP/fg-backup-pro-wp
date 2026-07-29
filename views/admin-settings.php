@@ -1,4 +1,20 @@
-<?php defined('ABSPATH') || exit; ?>
+<?php
+
+defined('ABSPATH') || exit;
+
+$filename_pattern = get_option('fg_backup_filename_pattern', FgBackup_Backup::default_filename_pattern());
+$preview_type = get_option('fg_backup_type', 'full') === 'db' ? 'db' : 'full';
+$preview_format = $preview_type === 'full'
+    ? get_option('fg_backup_archive_format', 'zip')
+    : get_option('fg_backup_database_format', 'gz');
+$preview_filename = FgBackup_Backup::build_filename(
+    $filename_pattern,
+    $preview_type,
+    $preview_format,
+    'backup_demo1234',
+    time()
+);
+?>
 
 <form method="post" action="options.php" class="fg-backup-settings">
     <?php settings_fields('fg_backup_settings'); ?>
@@ -36,8 +52,43 @@
         <tr>
             <th scope="row"><label for="fg-backup-filename-pattern"><?php esc_html_e('Dateiname', 'fg-backup-pro'); ?></label></th>
             <td>
-                <input type="text" name="fg_backup_filename_pattern" id="fg-backup-filename-pattern" class="regular-text code" value="<?php echo esc_attr(get_option('fg_backup_filename_pattern', FgBackup_Backup::default_filename_pattern())); ?>">
-                <p class="description"><code>%Y %y %m %d %H %M %S %host %site %type %format %id</code></p>
+                <div class="fg-backup-filename-field">
+                    <input type="text" name="fg_backup_filename_pattern" id="fg-backup-filename-pattern" class="regular-text code" value="<?php echo esc_attr($filename_pattern); ?>" autocomplete="off">
+
+                    <span class="fg-backup-filename-example">
+                        <span><?php esc_html_e('Beispiel:', 'fg-backup-pro'); ?></span>
+                        <code id="fg-backup-filename-preview" aria-live="polite"><?php echo esc_html($preview_filename); ?></code>
+                    </span>
+
+                    <div class="fg-backup-help-wrap">
+                        <button
+                            type="button"
+                            class="fg-backup-help-button"
+                            id="fg-backup-filename-help"
+                            aria-label="<?php esc_attr_e('Platzhalter anzeigen', 'fg-backup-pro'); ?>"
+                            aria-controls="fg-backup-filename-popover"
+                            aria-expanded="false"
+                        >?</button>
+
+                        <div class="fg-backup-filename-popover" id="fg-backup-filename-popover" role="dialog" aria-label="<?php esc_attr_e('Platzhalter für Dateinamen', 'fg-backup-pro'); ?>" hidden>
+                            <dl>
+                                <dt><code>%Y</code></dt><dd><?php esc_html_e('Jahr, vierstellig', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%y</code></dt><dd><?php esc_html_e('Jahr, zweistellig', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%m</code></dt><dd><?php esc_html_e('Monat', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%d</code></dt><dd><?php esc_html_e('Tag', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%H</code></dt><dd><?php esc_html_e('Stunde', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%M</code></dt><dd><?php esc_html_e('Minute', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%S</code></dt><dd><?php esc_html_e('Sekunde', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%host</code></dt><dd><?php esc_html_e('Domain', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%site</code></dt><dd><?php esc_html_e('Website-Name', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%type</code></dt><dd><?php esc_html_e('Backup-Typ', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%format</code></dt><dd><?php esc_html_e('Dateiformat', 'fg-backup-pro'); ?></dd>
+                                <dt><code>%id</code></dt><dd><?php esc_html_e('Kurze Job-ID', 'fg-backup-pro'); ?></dd>
+                            </dl>
+                            <span class="fg-backup-popover-note"><?php esc_html_e('Die passende Dateiendung wird automatisch ergänzt.', 'fg-backup-pro'); ?></span>
+                        </div>
+                    </div>
+                </div>
             </td>
         </tr>
         <tr>

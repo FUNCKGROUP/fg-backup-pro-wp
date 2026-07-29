@@ -32,6 +32,11 @@ class FgBackup_Cleanup {
 
             if ($reference && $reference < time() - (7 * DAY_IN_SECONDS)) {
                 delete_option($name);
+                if (!empty($job['id'])) {
+                    $job_id = sanitize_key($job['id']);
+                    delete_option('fg_backup_cancel_' . $job_id);
+                    delete_option('fg_backup_process_' . $job_id);
+                }
             }
         }
     }

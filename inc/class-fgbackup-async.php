@@ -6,6 +6,10 @@ class FgBackup_Async {
 
     const CRON_HOOK = 'fg_backup_process_job';
     const LOCK_OPTION = 'fg_backup_active_job';
+    const PROCESS_LOCK_TTL = 30 * MINUTE_IN_SECONDS;
+
+    private static $process_tokens = [];
+    private static $shutdown_dispatch_registered = false;
 
     public static function init() {
         add_action(self::CRON_HOOK, [__CLASS__, 'process'], 10, 1);
@@ -55,92 +59,160 @@ class FgBackup_Async {
         ], false);
         update_option(self::option_name($job_id), $job, false);
 
-        if (wp_schedule_single_event(time() + 1, self::CRON_HOOK, [$job_id]) === false) {
+        $scheduled = self::schedule_job($job_id);
+        if (is_wp_error($scheduled)) {
             delete_option(self::LOCK_OPTION);
             delete_option(self::option_name($job_id));
-            return new WP_Error('fg_backup_schedule_failed', __('Der Backup-Job konnte nicht geplant werden.', 'fg-backup-pro'));
+            return $scheduled;
         }
+
+        self::dispatch_cron();
 
         return $job_id;
     }
 
     public static function process($job_id) {
         $job_id = sanitize_key($job_id);
-        $job = get_option(self::option_name($job_id), false);
-        if (!is_array($job) || in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
+        if ($job_id === '' || !self::acquire_process_lock($job_id)) {
             return;
         }
-
-        if (self::is_cancel_requested($job_id)) {
-            self::cancel_job($job);
-            return;
-        }
-
-        if (function_exists('set_time_limit')) {
-            $time_limit = (!empty($job['format']) && $job['format'] === 'tgz' && $job['step'] === 'files_archive') ? 300 : 20;
-            @set_time_limit($time_limit);
-        }
-
-        $job['status'] = 'running';
-        $job['updated_at'] = time();
 
         try {
-            switch ($job['step']) {
-                case 'init':
-                    self::initialize_job($job);
-                    break;
-
-                case 'db_export':
-                    self::process_database($job);
-                    break;
-
-                case 'db_package':
-                    self::package_database($job);
-                    break;
-
-                case 'files_scan':
-                    self::process_file_scan($job);
-                    break;
-
-                case 'archive_init':
-                    FgBackup_Backup::initialize_archive($job['format'], $job['archive_temp']);
-                    $job['step'] = 'files_archive';
-                    $job['progress'] = 62;
-                    $job['stage'] = __('Archivierung', 'fg-backup-pro');
-                    $job['detail'] = __('Archiv wurde vorbereitet.', 'fg-backup-pro');
-                    break;
-
-                case 'files_archive':
-                    self::process_archive($job);
-                    break;
-
-                case 'verify':
-                    self::verify_and_publish($job);
-                    break;
-
-                case 'cleanup':
-                    self::complete_job($job);
-                    break;
-
-                default:
-                    throw new RuntimeException(__('Unbekannter Backup-Schritt.', 'fg-backup-pro'));
+            $job = self::get_status_raw($job_id);
+            if (!is_array($job) || in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
+                return;
             }
 
-            if (self::is_cancel_requested($job_id, true)) {
+            if (self::is_cancel_requested($job_id)) {
                 self::cancel_job($job);
                 return;
             }
 
+            if (function_exists('set_time_limit')) {
+                $time_limit = (!empty($job['format']) && $job['format'] === 'tgz' && $job['step'] === 'files_archive') ? 300 : 20;
+                @set_time_limit($time_limit);
+            }
+
+            $job['status'] = 'running';
             $job['updated_at'] = time();
+            $job['processing_started_at'] = time();
             update_option(self::option_name($job_id), $job, false);
 
-            if (!in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
-                if (wp_schedule_single_event(time() + 1, self::CRON_HOOK, [$job_id]) === false) {
-                    throw new RuntimeException(__('Der nächste Backup-Schritt konnte nicht geplant werden.', 'fg-backup-pro'));
+            try {
+                $process_started = microtime(true);
+
+                switch ($job['step']) {
+                    case 'init':
+                    case 'db_export':
+                    case 'db_package':
+                        self::process_database_pipeline($job, $process_started);
+                        break;
+
+                    case 'files_scan':
+                        self::process_file_scan($job);
+                        break;
+
+                    case 'archive_init':
+                        FgBackup_Backup::initialize_archive($job['format'], $job['archive_temp']);
+                        $job['step'] = 'files_archive';
+                        $job['progress'] = 62;
+                        $job['stage'] = __('Archivierung', 'fg-backup-pro');
+                        $job['detail'] = __('Archiv wurde vorbereitet.', 'fg-backup-pro');
+                        break;
+
+                    case 'files_archive':
+                        self::process_archive($job);
+                        break;
+
+                    case 'verify':
+                        self::verify_and_publish($job);
+                        if ($job['step'] === 'cleanup' && (microtime(true) - $process_started) < 12) {
+                            self::complete_job($job);
+                        }
+                        break;
+
+                    case 'cleanup':
+                        self::complete_job($job);
+                        break;
+
+                    default:
+                        throw new RuntimeException(__('Unbekannter Backup-Schritt.', 'fg-backup-pro'));
                 }
+
+                if (self::is_cancel_requested($job_id, true)) {
+                    self::cancel_job($job);
+                    return;
+                }
+
+                $job['processing_started_at'] = 0;
+                $job['updated_at'] = time();
+                update_option(self::option_name($job_id), $job, false);
+
+                if (!in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
+                    $scheduled = self::schedule_job($job_id);
+                    if (is_wp_error($scheduled)) {
+                        throw new RuntimeException($scheduled->get_error_message());
+                    }
+                    self::dispatch_cron_on_shutdown();
+                }
+            } catch (Throwable $exception) {
+                self::fail_job($job, $exception->getMessage());
             }
-        } catch (Throwable $exception) {
-            self::fail_job($job, $exception->getMessage());
+        } finally {
+            self::release_process_lock($job_id);
+        }
+    }
+
+    public static function kick($job_id) {
+        $job_id = sanitize_key($job_id);
+        $job = self::get_status_raw($job_id);
+
+        if (!is_array($job) || in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
+            return $job;
+        }
+
+        if ($job['status'] === 'cancel_requested' && !self::is_process_active($job_id)) {
+            self::cancel_job($job);
+            return self::get_status_raw($job_id);
+        }
+
+        if (!self::is_process_active($job_id)) {
+            $scheduled = self::schedule_job($job_id);
+            if (!is_wp_error($scheduled)) {
+                self::dispatch_cron();
+            }
+        }
+
+        return self::get_status_raw($job_id);
+    }
+
+    private static function process_database_pipeline(array &$job, $process_started) {
+        if ($job['step'] === 'init') {
+            self::initialize_job($job);
+        }
+
+        if ($job['step'] === 'db_export') {
+            self::process_database($job);
+        }
+
+        if (self::is_cancel_requested($job['id'], true)) {
+            return;
+        }
+
+        if ($job['step'] === 'db_package' && (microtime(true) - $process_started) < 10) {
+            self::package_database($job);
+        }
+
+        if (self::is_cancel_requested($job['id'], true)) {
+            return;
+        }
+
+        if ($job['type'] === 'db' && $job['step'] === 'verify' && (microtime(true) - $process_started) < 12) {
+            self::verify_and_publish($job);
+        }
+
+        if ($job['type'] === 'db' && $job['step'] === 'cleanup' && (microtime(true) - $process_started) < 14) {
+            self::complete_job($job);
         }
     }
 
@@ -193,56 +265,68 @@ class FgBackup_Async {
     }
 
     private static function process_database(array &$job) {
-        $tables = isset($job['tables']) && is_array($job['tables']) ? $job['tables'] : [];
-        $table_count = count($tables);
+        $started = microtime(true);
+        $max_seconds = 8.0;
+        $operations = 0;
 
-        if ($job['table_index'] >= $table_count) {
-            FgBackup_Backup::write_database_footer($job['db_file']);
-            if ($job['type'] === 'db') {
-                $job['step'] = 'db_package';
-                $job['progress'] = 84;
-                $job['stage'] = __('Datenbank wird verpackt', 'fg-backup-pro');
-                $job['detail'] = FgBackup_Backup::format_label('db', $job['format']);
-            } else {
-                $job['step'] = 'files_scan';
-                $job['progress'] = 45;
-                $job['stage'] = __('Dateien werden erfasst', 'fg-backup-pro');
-                $job['detail'] = __('Dateiliste wird erstellt.', 'fg-backup-pro');
+        do {
+            $tables = isset($job['tables']) && is_array($job['tables']) ? $job['tables'] : [];
+            $table_count = count($tables);
+
+            if ($job['table_index'] >= $table_count) {
+                FgBackup_Backup::write_database_footer($job['db_file']);
+                if ($job['type'] === 'db') {
+                    $job['step'] = 'db_package';
+                    $job['progress'] = 84;
+                    $job['stage'] = __('Datenbank wird verpackt', 'fg-backup-pro');
+                    $job['detail'] = FgBackup_Backup::format_label('db', $job['format']);
+                } else {
+                    $job['step'] = 'files_scan';
+                    $job['progress'] = 45;
+                    $job['stage'] = __('Dateien werden erfasst', 'fg-backup-pro');
+                    $job['detail'] = __('Dateiliste wird erstellt.', 'fg-backup-pro');
+                }
+                return;
             }
-            return;
-        }
 
-        $table = $tables[$job['table_index']];
-        $result = FgBackup_Backup::export_table_chunk(
-            $table,
-            $job['db_file'],
-            (int) $job['row_offset'],
-            !$job['table_started']
-        );
+            $table = $tables[$job['table_index']];
+            $result = FgBackup_Backup::export_table_chunk(
+                $table,
+                $job['db_file'],
+                (int) $job['row_offset'],
+                !$job['table_started']
+            );
 
-        $job['table_started'] = true;
-        $job['row_offset'] += (int) $result['rows'];
-        $display_index = min($table_count, $job['table_index'] + 1);
-        $job['stage'] = __('Datenbankexport', 'fg-backup-pro');
-        $job['detail'] = sprintf(
-            __('Tabelle %1$d von %2$d: %3$s (%4$d Zeilen)', 'fg-backup-pro'),
-            $display_index,
-            $table_count,
-            $table,
-            (int) $job['row_offset']
-        );
+            $job['table_started'] = true;
+            $job['row_offset'] += (int) $result['rows'];
+            $display_index = min($table_count, $job['table_index'] + 1);
+            $job['stage'] = __('Datenbankexport', 'fg-backup-pro');
+            $job['detail'] = sprintf(
+                __('Tabelle %1$d von %2$d: %3$s (%4$d Zeilen)', 'fg-backup-pro'),
+                $display_index,
+                $table_count,
+                $table,
+                (int) $job['row_offset']
+            );
 
-        if (!empty($result['done'])) {
-            $job['table_index']++;
-            $job['row_offset'] = 0;
-            $job['table_started'] = false;
-        }
+            if (!empty($result['done'])) {
+                $job['table_index']++;
+                $job['row_offset'] = 0;
+                $job['table_started'] = false;
+            }
 
-        $range = $job['type'] === 'db' ? 76 : 38;
-        $base = 5;
-        $job['progress'] = $table_count > 0
-            ? min($base + $range, $base + (int) floor(($job['table_index'] / $table_count) * $range))
-            : $base + $range;
+            $range = $job['type'] === 'db' ? 76 : 38;
+            $base = 5;
+            $job['progress'] = $table_count > 0
+                ? min($base + $range, $base + (int) floor(($job['table_index'] / $table_count) * $range))
+                : $base + $range;
+
+            $operations++;
+
+            if (($operations % 5) === 0 && self::is_cancel_requested($job['id'], true)) {
+                return;
+            }
+        } while ($operations < 100 && (microtime(true) - $started) < $max_seconds);
     }
 
     private static function package_database(array &$job) {
@@ -393,7 +477,7 @@ class FgBackup_Async {
         FgBackup_Backup::move_to_final($job['artifact_temp'], $job['final_path']);
         $job['file'] = basename($job['final_path']);
         $job['size'] = (int) filesize($job['final_path']);
-        $job['checksum'] = FgBackup_Backup::checksum($job['final_path']);
+        $job['checksum'] = '';
         $job['progress'] = 98;
         $job['stage'] = __('Abschluss', 'fg-backup-pro');
         $job['detail'] = __('Backup wird abgeschlossen.', 'fg-backup-pro');
@@ -438,7 +522,7 @@ class FgBackup_Async {
 
     public static function request_cancel($job_id) {
         $job_id = sanitize_key($job_id);
-        $job = self::get_status($job_id);
+        $job = self::get_status_raw($job_id);
 
         if (!is_array($job)) {
             return new WP_Error('fg_backup_not_found', __('Backup-Job nicht gefunden.', 'fg-backup-pro'));
@@ -456,7 +540,16 @@ class FgBackup_Async {
         update_option(self::option_name($job_id), $job, false);
 
         wp_clear_scheduled_hook(self::CRON_HOOK, [$job_id]);
-        wp_schedule_single_event(time() + 1, self::CRON_HOOK, [$job_id]);
+
+        if (!self::is_process_active($job_id)) {
+            self::cancel_job($job);
+            return self::get_status_raw($job_id);
+        }
+
+        $scheduled = self::schedule_job($job_id);
+        if (!is_wp_error($scheduled)) {
+            self::dispatch_cron();
+        }
 
         return $job;
     }
@@ -524,7 +617,7 @@ class FgBackup_Async {
     }
 
     public static function get_status($job_id) {
-        return get_option(self::option_name(sanitize_key($job_id)), false);
+        return self::kick($job_id);
     }
 
     public static function get_active_job() {
@@ -543,11 +636,21 @@ class FgBackup_Async {
         }
 
         $created = isset($active['created_at']) ? (int) $active['created_at'] : 0;
-        $job = self::get_status($active['job_id']);
+        $job = self::get_status_raw($active['job_id']);
         $finished = is_array($job) && in_array($job['status'], ['completed', 'failed', 'canceled'], true);
 
-        if ($finished || !$created || $created < time() - (12 * HOUR_IN_SECONDS)) {
+        if (is_array($job) && $job['status'] === 'cancel_requested' && !self::is_process_active($active['job_id'])) {
+            self::cancel_job($job);
+            return;
+        }
+
+        if ($finished || !is_array($job) || !$created) {
             delete_option(self::LOCK_OPTION);
+            return;
+        }
+
+        if ($created < time() - (12 * HOUR_IN_SECONDS) && !self::is_process_active($active['job_id'])) {
+            self::fail_job($job, __('Der Backup-Job wurde wegen fehlender Aktivität beendet.', 'fg-backup-pro'));
         }
     }
 
@@ -562,7 +665,114 @@ class FgBackup_Async {
         return 'fg_backup_cancel_' . sanitize_key($job_id);
     }
 
+    private static function process_lock_option_name($job_id) {
+        return 'fg_backup_process_' . sanitize_key($job_id);
+    }
+
     private static function option_name($job_id) {
         return 'fg_backup_job_' . sanitize_key($job_id);
+    }
+
+    private static function get_status_raw($job_id) {
+        return get_option(self::option_name(sanitize_key($job_id)), false);
+    }
+
+    private static function schedule_job($job_id) {
+        $job_id = sanitize_key($job_id);
+        if ($job_id === '') {
+            return new WP_Error('fg_backup_schedule_failed', __('Der Backup-Job konnte nicht geplant werden.', 'fg-backup-pro'));
+        }
+
+        if (wp_next_scheduled(self::CRON_HOOK, [$job_id])) {
+            return true;
+        }
+
+        $scheduled = wp_schedule_single_event(time(), self::CRON_HOOK, [$job_id], true);
+        if (is_wp_error($scheduled)) {
+            return new WP_Error('fg_backup_schedule_failed', $scheduled->get_error_message());
+        }
+        if ($scheduled === false) {
+            return new WP_Error('fg_backup_schedule_failed', __('Der Backup-Job konnte nicht geplant werden.', 'fg-backup-pro'));
+        }
+
+        return true;
+    }
+
+    public static function dispatch_cron() {
+        $cron_url = site_url('wp-cron.php?doing_wp_cron=' . rawurlencode(sprintf('%.22F', microtime(true))));
+        wp_remote_post($cron_url, [
+            'timeout' => 0.01,
+            'blocking' => false,
+            'sslverify' => apply_filters('https_local_ssl_verify', false),
+        ]);
+    }
+
+    private static function dispatch_cron_on_shutdown() {
+        if (self::$shutdown_dispatch_registered) {
+            return;
+        }
+
+        self::$shutdown_dispatch_registered = true;
+        register_shutdown_function([__CLASS__, 'dispatch_cron']);
+    }
+
+    private static function acquire_process_lock($job_id) {
+        $job_id = sanitize_key($job_id);
+        $option = self::process_lock_option_name($job_id);
+        $token = wp_generate_uuid4();
+        $value = [
+            'token' => $token,
+            'started_at' => time(),
+        ];
+
+        if (!add_option($option, $value, '', false)) {
+            $existing = get_option($option, []);
+            $started = is_array($existing) && isset($existing['started_at']) ? (int) $existing['started_at'] : 0;
+
+            if ($started && $started >= time() - self::PROCESS_LOCK_TTL) {
+                return false;
+            }
+
+            delete_option($option);
+            if (!add_option($option, $value, '', false)) {
+                return false;
+            }
+        }
+
+        self::$process_tokens[$job_id] = $token;
+        return true;
+    }
+
+    private static function is_process_active($job_id) {
+        $job_id = sanitize_key($job_id);
+        $option = self::process_lock_option_name($job_id);
+        $lock = get_option($option, false);
+
+        if (!is_array($lock)) {
+            return false;
+        }
+
+        $started = isset($lock['started_at']) ? (int) $lock['started_at'] : 0;
+        if (!$started || $started < time() - self::PROCESS_LOCK_TTL) {
+            delete_option($option);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function release_process_lock($job_id) {
+        $job_id = sanitize_key($job_id);
+        if ($job_id === '' || empty(self::$process_tokens[$job_id])) {
+            return;
+        }
+
+        $option = self::process_lock_option_name($job_id);
+        $lock = get_option($option, []);
+        if (is_array($lock) && !empty($lock['token']) && hash_equals((string) $lock['token'], (string) self::$process_tokens[$job_id])) {
+            delete_option($option);
+        }
+
+        unset(self::$process_tokens[$job_id]);
     }
 }
