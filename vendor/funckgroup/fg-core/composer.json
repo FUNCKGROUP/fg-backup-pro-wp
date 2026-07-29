@@ -1,0 +1,12 @@
+{
+  "name": "funckgroup/fg-core",
+  "description": "Embedded runtime for FUNCKGROUP WordPress plugins",
+  "type": "library",
+  "license": "proprietary",
+  "require": {
+    "php": ">=7.4"
+  },
+  "scripts": {
+    "fg-core:sync": "@php tools/sync-fg-core.php"
+  }
+}

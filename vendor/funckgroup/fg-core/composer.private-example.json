@@ -1,0 +1,27 @@
+{
+  "name": "funckgroup/mein-plugin",
+  "description": "FUNCKGROUP WordPress plugin with embedded FG Core",
+  "type": "wordpress-plugin",
+  "license": "proprietary",
+  "require": {
+    "php": ">=7.4"
+  },
+  "repositories": [
+    {
+      "type": "vcs",
+      "url": "git@github.com:funckgroup/fg-core.git"
+    }
+  ],
+  "require-dev": {
+    "funckgroup/fg-core": "^1.1"
+  },
+  "scripts": {
+    "fg-core:sync": "@php tools/sync-fg-core.php",
+    "post-install-cmd": [
+      "@fg-core:sync"
+    ],
+    "post-update-cmd": [
+      "@fg-core:sync"
+    ]
+  }
+}
