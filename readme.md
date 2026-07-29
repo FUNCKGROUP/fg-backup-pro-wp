@@ -112,3 +112,7 @@ https://github.com/FUNCKGROUP/fg-backup-pro-wp
 ```
 
 Der Release-Ordner muss `fg-backup-pro-wp` heißen und die Hauptdatei `fg-backup-pro.php` enthalten.
+
+## Changelog
+
+Die Änderungen der veröffentlichten Versionen stehen in [`CHANGELOG.md`](CHANGELOG.md).
