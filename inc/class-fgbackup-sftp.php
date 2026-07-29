@@ -98,23 +98,38 @@ class FgBackup_Sftp {
         $test_path = rtrim($directory, '/') . '/' . $test_name;
         $payload = 'FG Backup Pro ' . gmdate('c');
 
-        if (!$sftp->put($test_path, $payload, SFTP::SOURCE_STRING)) {
-            throw new RuntimeException(__('Im SFTP-Zielverzeichnis konnte keine Testdatei geschrieben werden.', 'fg-backup-pro'));
+        $test_error = null;
+        $key = '';
+
+        try {
+            if (!$sftp->put($test_path, $payload, SFTP::SOURCE_STRING)) {
+                throw new RuntimeException(__('Im SFTP-Zielverzeichnis konnte keine Testdatei geschrieben werden.', 'fg-backup-pro'));
+            }
+
+            // Manche SFTP-Server liefern direkt nach dem Schreiben keine verlässlichen
+            // Stat-/Größenangaben. Beim kleinen Verbindungstest vergleichen wir deshalb
+            // den tatsächlich wieder eingelesenen Inhalt bytegenau.
+            $remote_payload = $sftp->get($test_path);
+            if (!is_string($remote_payload) || !hash_equals($payload, $remote_payload)) {
+                throw new RuntimeException(__('Die geschriebene SFTP-Testdatei konnte nicht korrekt zurückgelesen werden.', 'fg-backup-pro'));
+            }
+
+            $key = (string) $sftp->getServerPublicHostKey();
+            if ($key === '') {
+                throw new RuntimeException(__('Der öffentliche SFTP-Serverschlüssel konnte nicht gelesen werden.', 'fg-backup-pro'));
+            }
+        } catch (Throwable $exception) {
+            $test_error = $exception;
         }
 
-        $remote_size = self::remote_file_size($sftp, $test_path);
-        if ($remote_size === false || (int) $remote_size !== strlen($payload)) {
-            $sftp->delete($test_path);
-            throw new RuntimeException(__('Die geschriebene SFTP-Testdatei konnte nicht bestätigt werden.', 'fg-backup-pro'));
+        // Die Testdatei immer aufräumen – auch wenn Lesen oder Host-Key-Prüfung fehlschlagen.
+        $deleted = $sftp->delete($test_path);
+        if (!$deleted && $test_error === null) {
+            $test_error = new RuntimeException(__('Die SFTP-Testdatei konnte nicht wieder gelöscht werden.', 'fg-backup-pro'));
         }
 
-        if (!$sftp->delete($test_path)) {
-            throw new RuntimeException(__('Die SFTP-Testdatei konnte nicht wieder gelöscht werden.', 'fg-backup-pro'));
-        }
-
-        $key = (string) $sftp->getServerPublicHostKey();
-        if ($key === '') {
-            throw new RuntimeException(__('Der öffentliche SFTP-Serverschlüssel konnte nicht gelesen werden.', 'fg-backup-pro'));
+        if ($test_error instanceof Throwable) {
+            throw $test_error;
         }
 
         update_option('fg_backup_sftp_host_key', $key, false);
@@ -376,10 +391,27 @@ class FgBackup_Sftp {
      * @return int|false
      */
     private static function remote_file_size(SFTP $sftp, $path) {
+        $path = (string) $path;
         $sftp->clearStatCache();
-        $size = $sftp->filesize((string) $path);
 
-        return $size === false ? false : (int) $size;
+        $size = $sftp->filesize($path);
+        if ($size !== false) {
+            return (int) $size;
+        }
+
+        $stat = $sftp->stat($path);
+        if (is_array($stat) && array_key_exists('size', $stat)) {
+            return (int) $stat['size'];
+        }
+
+        $directory = dirname($path);
+        $name = basename($path);
+        $list = $sftp->rawlist($directory);
+        if (is_array($list) && isset($list[$name]) && is_array($list[$name]) && array_key_exists('size', $list[$name])) {
+            return (int) $list[$name]['size'];
+        }
+
+        return false;
     }
 
     private static function ensure_directory(SFTP $sftp, $directory) {

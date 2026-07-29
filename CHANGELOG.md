@@ -1,17 +1,22 @@
 # Changelog
 
-## 2.0.0 – Test-Build, 29.07.2026
+## 2.0.0 – 29.07.2026
 
 - SFTP über phpseclib 3 mit PHP-7.4-Kompatibilität
-- Passwort- und SSH-Key-Anmeldung mit verschlüsselten Secrets
-- Host-Key-Pinning nach erfolgreichem Schreib- und Löschtest
-- blockweiser Upload mit Fortschritt und Abbruch
-- Prüfung der Remote-Dateigröße vor und nach der Finalisierung
+- Passwort- und SSH-Key-Anmeldung mit optionaler Passphrase
+- verschlüsselte Speicherung sensibler SFTP-Zugangsdaten
+- alternative Bereitstellung sensibler Werte über Konstanten in `wp-config.php`
+- SSH-Host-Key-Pinning nach erfolgreichem Schreib-, Lese- und Löschtest
+- bytegenauer Rücklesetest der SFTP-Testdatei für Server mit unzuverlässigen Stat-Angaben
+- blockweiser Upload mit Fortschritt und kontrolliertem Abbruch
+- temporäre Remote-Dateien mit `.part` und automatische Bereinigung
+- robuste Remote-Größenprüfung über `filesize()`, `stat()` und `rawlist()`
+- Größenprüfung vor und nach dem finalen Umbenennen
 - automatische Remote-Rotation
 - Remote-Dateiliste und geschütztes Löschen im WordPress-Admin
 - lokale Datei nach erfolgreichem Upload optional löschen
 - lokale Sicherung bleibt bei SFTP-Abbruch oder Fehler erhalten
-- sichtbarere Speicherbedarfsschätzung vor dem Start
+- deutlich sichtbare Speicherbedarfsschätzung vor dem Backup-Start
 - Composer-Abhängigkeit `phpseclib/phpseclib` im Plugin-Root
 
 ## 1.1.1 – 29.07.2026
@@ -39,5 +44,3 @@
 - Erkennung klassischer WordPress- und Bedrock-Strukturen
 - deutlich beschleunigter Export kleiner und leerer Datenbanktabellen
 - Composer-Konfiguration im Plugin-Root ohne Validate-Skript
-
-Remote-Speicherziele folgen in Version 2.0.
