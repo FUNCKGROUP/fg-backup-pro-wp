@@ -199,3 +199,16 @@
         flex-basis: calc(100% - 34px);
     }
 }
+
+
+.fg-backup-run #fg-backup-note {
+    min-width: 260px;
+}
+
+.fg-backup-note {
+    display: block;
+    margin-top: 4px;
+    color: #646970;
+    font-size: 12px;
+    line-height: 1.4;
+}

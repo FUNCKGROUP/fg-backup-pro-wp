@@ -15,7 +15,7 @@ class FgBackup_Async {
         add_action(self::CRON_HOOK, [__CLASS__, 'process'], 10, 1);
     }
 
-    public static function queue_backup($type = 'full', $origin = 'manual', $format = '') {
+    public static function queue_backup($type = 'full', $origin = 'manual', $format = '', $note = '') {
         $type = in_array($type, ['full', 'db'], true) ? $type : 'full';
         $origin = $origin === 'scheduled' ? 'scheduled' : 'manual';
         if ($format === '') {
@@ -24,6 +24,7 @@ class FgBackup_Async {
                 : get_option('fg_backup_database_format', 'gz');
         }
         $format = FgBackup_Backup::normalize_format($type, $format);
+        $note = FgBackup_Admin::sanitize_note($note);
 
         FgBackup_Storage::ensure();
         self::release_stale_lock();
@@ -40,6 +41,7 @@ class FgBackup_Async {
             'type' => $type,
             'format' => $format,
             'origin' => $origin,
+            'note' => $note,
             'progress' => 0,
             'stage' => __('Wartet auf Start', 'fg-backup-pro'),
             'detail' => '',
@@ -51,6 +53,8 @@ class FgBackup_Async {
             'file' => '',
             'size' => 0,
             'checksum' => '',
+            'estimated_required_space' => 0,
+            'available_space' => 0,
         ];
 
         update_option(self::LOCK_OPTION, [
@@ -217,8 +221,14 @@ class FgBackup_Async {
     }
 
     private static function initialize_job(array &$job) {
-        $temp_dir = FgBackup_Storage::create_job_temp_dir($job['id']);
         $source_root = FgBackup_Backup::get_source_root();
+        $space = FgBackup_Backup::estimate_initial_space($job['type'], $job['format']);
+        FgBackup_Backup::assert_free_space(FgBackup_Storage::get_temp_root(), $space['required']);
+
+        $job['estimated_required_space'] = (int) $space['required'];
+        $job['available_space'] = (int) $space['available'];
+
+        $temp_dir = FgBackup_Storage::create_job_temp_dir($job['id']);
         $pattern = get_option('fg_backup_filename_pattern', FgBackup_Backup::default_filename_pattern());
         $file_name = FgBackup_Backup::build_filename($pattern, $job['type'], $job['format'], $job['id'], $job['started_at']);
 
@@ -254,11 +264,16 @@ class FgBackup_Async {
             'offset' => 0,
         ]];
         $job['file_count'] = 0;
+        $job['file_bytes'] = 0;
         $job['manifest_offset'] = 0;
         $job['archived_files'] = 0;
         $job['progress'] = 2;
         $job['stage'] = __('Datenbankexport', 'fg-backup-pro');
-        $job['detail'] = __('Datenbank wird vorbereitet.', 'fg-backup-pro');
+        $job['detail'] = sprintf(
+            __('Speicher geprüft: ungefähr %1$s benötigt, %2$s verfügbar.', 'fg-backup-pro'),
+            size_format((int) $space['required'], 1),
+            $space['available'] > 0 ? size_format((int) $space['available'], 1) : __('nicht ermittelbar', 'fg-backup-pro')
+        );
         $job['step'] = 'db_export';
 
         FgBackup_Backup::write_database_header($job['db_file']);
@@ -367,15 +382,26 @@ class FgBackup_Async {
 
         $job['scan_queue'] = $result['queue'];
         $job['file_count'] += (int) $result['files_added'];
+        $job['file_bytes'] += isset($result['bytes_added']) ? (int) $result['bytes_added'] : 0;
         $job['progress'] = min(60, 45 + (int) floor(min($job['file_count'], 10000) / 667));
         $job['stage'] = __('Dateien werden erfasst', 'fg-backup-pro');
         $job['detail'] = sprintf(__('%d Dateien gefunden', 'fg-backup-pro'), (int) $job['file_count']);
 
         if (!empty($result['done'])) {
+            $database_bytes = is_file($job['db_file']) ? (int) filesize($job['db_file']) : 0;
+            $required = FgBackup_Backup::estimate_archive_space((int) $job['file_bytes'], $database_bytes, $job['format']);
+            FgBackup_Backup::assert_free_space(FgBackup_Storage::get_temp_root(), $required);
+            $job['estimated_required_space'] = $required;
+            $available = @disk_free_space(FgBackup_Storage::get_temp_root());
+            $job['available_space'] = $available === false ? 0 : (int) $available;
             $job['step'] = 'archive_init';
             $job['progress'] = 60;
             $job['stage'] = __('Archiv wird vorbereitet', 'fg-backup-pro');
-            $job['detail'] = FgBackup_Backup::format_label('full', $job['format']);
+            $job['detail'] = sprintf(
+                __('%1$s · ungefähr %2$s temporärer Speicher erforderlich', 'fg-backup-pro'),
+                FgBackup_Backup::format_label('full', $job['format']),
+                size_format($required, 1)
+            );
         }
     }
 
@@ -414,6 +440,7 @@ class FgBackup_Async {
                 'backup_type' => $job['type'],
                 'archive_format' => $job['format'],
                 'file_count' => (int) $job['archived_files'],
+                'note' => isset($job['note']) ? (string) $job['note'] : '',
             ]);
 
             if ($job['format'] === 'tgz') {
@@ -611,6 +638,7 @@ class FgBackup_Async {
             'size' => isset($job['size']) ? (int) $job['size'] : 0,
             'checksum' => isset($job['checksum']) ? $job['checksum'] : '',
             'error' => isset($job['error']) ? $job['error'] : '',
+            'note' => isset($job['note']) ? $job['note'] : '',
         ]);
 
         update_option('fg_backup_history', array_slice($history, 0, 20), false);

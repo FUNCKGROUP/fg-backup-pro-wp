@@ -173,6 +173,18 @@ class FgBackup_Admin {
         return in_array($value, $allowed, true) ? $value : 5;
     }
 
+
+    public static function sanitize_note($value) {
+        $value = preg_replace('/\s+/u', ' ', wp_strip_all_tags((string) $value));
+        $value = trim((string) $value);
+
+        if (function_exists('mb_substr')) {
+            return mb_substr($value, 0, 160);
+        }
+
+        return substr($value, 0, 160);
+    }
+
     public static function sanitize_checkbox($value) {
         return empty($value) ? 0 : 1;
     }
@@ -302,7 +314,8 @@ class FgBackup_Admin {
         check_ajax_referer('fg_backup_ajax', 'security');
 
         $type = isset($_POST['backup_type']) ? self::sanitize_type(wp_unslash($_POST['backup_type'])) : 'full';
-        $job_id = FgBackup_Async::queue_backup($type, 'manual');
+        $note = isset($_POST['backup_note']) ? self::sanitize_note(wp_unslash($_POST['backup_note'])) : '';
+        $job_id = FgBackup_Async::queue_backup($type, 'manual', '', $note);
 
         if (is_wp_error($job_id)) {
             wp_send_json_error(['message' => $job_id->get_error_message()]);

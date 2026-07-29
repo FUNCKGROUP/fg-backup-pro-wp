@@ -17,6 +17,10 @@ class FgBackup_Notifications {
             wp_date('d.m.Y H:i', isset($job['finished_at']) ? (int) $job['finished_at'] : time())
         );
 
+        if (!empty($job['note'])) {
+            $body .= "\nNotiz: " . $job['note'];
+        }
+
         wp_mail(get_option('admin_email'), $subject, $body);
     }
 

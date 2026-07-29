@@ -237,6 +237,85 @@ class FgBackup_Backup {
         return array_values($tables);
     }
 
+    public static function estimate_database_size() {
+        global $wpdb;
+
+        $tables = array_fill_keys(self::get_tables(), true);
+        if (!$tables) {
+            return 0;
+        }
+
+        $statuses = $wpdb->get_results('SHOW TABLE STATUS', ARRAY_A);
+        if (!is_array($statuses)) {
+            return 0;
+        }
+
+        $total = 0;
+        foreach ($statuses as $status) {
+            $name = isset($status['Name']) ? (string) $status['Name'] : '';
+            if ($name === '' || !isset($tables[$name])) {
+                continue;
+            }
+
+            $total += isset($status['Data_length']) ? (int) $status['Data_length'] : 0;
+            $total += isset($status['Index_length']) ? (int) $status['Index_length'] : 0;
+        }
+
+        return max(0, $total);
+    }
+
+    public static function estimate_initial_space($type, $format) {
+        $database_size = self::estimate_database_size();
+        $sql_estimate = max(8 * MB_IN_BYTES, (int) ceil($database_size * 1.5));
+
+        if ($type === 'db') {
+            if ($format === 'sql') {
+                $required = $sql_estimate + (32 * MB_IN_BYTES);
+            } else {
+                $required = (int) ceil($sql_estimate * 2.05) + (32 * MB_IN_BYTES);
+            }
+        } else {
+            $required = $sql_estimate + (32 * MB_IN_BYTES);
+        }
+
+        $available = @disk_free_space(FgBackup_Storage::get_temp_root());
+
+        return [
+            'database' => $database_size,
+            'sql' => $sql_estimate,
+            'required' => (int) $required,
+            'available' => $available === false ? 0 : (int) $available,
+        ];
+    }
+
+    public static function estimate_archive_space($file_bytes, $database_bytes, $format) {
+        $content = max(0, (int) $file_bytes) + max(0, (int) $database_bytes);
+        $reserve = 64 * MB_IN_BYTES;
+
+        if ($format === 'tgz') {
+            return (int) ceil($content * 2.15) + $reserve;
+        }
+
+        return (int) ceil($content * 1.15) + $reserve;
+    }
+
+    public static function assert_free_space($path, $required) {
+        $required = max(0, (int) $required);
+        $available = @disk_free_space($path);
+
+        if ($available === false || $required === 0) {
+            return;
+        }
+
+        if ((int) $available < $required) {
+            throw new RuntimeException(sprintf(
+                __('Nicht genügend freier Speicher. Ungefähr %1$s werden benötigt, verfügbar sind %2$s.', 'fg-backup-pro'),
+                size_format($required, 1),
+                size_format((int) $available, 1)
+            ));
+        }
+    }
+
     public static function write_database_header($file_path) {
         $header = "-- FG Backup Pro " . FG_BACKUP_VERSION . "\n";
         $header .= "-- Created: " . gmdate('c') . "\n\n";
@@ -343,6 +422,7 @@ class FgBackup_Backup {
     public static function scan_files_chunk(array $queue, $manifest_path, $source_root, $max_entries, $max_seconds) {
         $processed = 0;
         $files_added = 0;
+        $bytes_added = 0;
         $started = microtime(true);
         $source_root = trailingslashit($source_root);
 
@@ -383,10 +463,11 @@ class FgBackup_Backup {
                     } elseif (is_file($path) && is_readable($path)) {
                         $relative = ltrim(substr(wp_normalize_path($path), strlen(wp_normalize_path($source_root))), '/');
                         if ($relative !== '') {
+                            $file_size = max(0, (int) @filesize($path));
                             $entry = wp_json_encode([
                                 'path' => $path,
                                 'name' => $relative,
-                                'size' => (int) @filesize($path),
+                                'size' => $file_size,
                             ]);
 
                             if (!is_string($entry) || @file_put_contents($manifest_path, $entry . "\n", FILE_APPEND | LOCK_EX) === false) {
@@ -394,6 +475,7 @@ class FgBackup_Backup {
                             }
 
                             $files_added++;
+                            $bytes_added += $file_size;
                         }
                     }
                 }
@@ -413,6 +495,7 @@ class FgBackup_Backup {
         return [
             'queue' => array_values($queue),
             'files_added' => $files_added,
+            'bytes_added' => $bytes_added,
             'done' => empty($queue),
         ];
     }
@@ -975,6 +1058,7 @@ class FgBackup_Backup {
                 'date' => wp_date('d.m.Y H:i', $mtime),
                 'checksum' => !empty($history['checksum']) ? (string) $history['checksum'] : '',
                 'verified' => !empty($history) && (!isset($history['status']) || $history['status'] === 'completed'),
+                'note' => !empty($history['note']) ? (string) $history['note'] : '',
             ];
         }
 

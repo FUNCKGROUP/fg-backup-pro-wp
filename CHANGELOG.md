@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1 – 29.07.2026
+
+- konservative Speicherplatzprüfung vor dem Datenbankexport
+- zweite Speicherplatzprüfung vor der Archivierung vollständiger Backups
+- Berücksichtigung des erhöhten temporären Speicherbedarfs von TGZ
+- optionale Backup-Notiz bis 160 Zeichen
+- Anzeige der Notiz bei lokalen Backups und in der Laufhistorie
+- Speicherung der Notiz in der Metadatei vollständiger Backups
+
 ## 1.1.0 – 29.07.2026
 
 - Integration in FG Core 1.1.3

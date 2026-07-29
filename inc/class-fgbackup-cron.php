@@ -58,7 +58,7 @@ class FgBackup_Cron {
 
     public static function run() {
         $type = get_option('fg_backup_type', 'full');
-        FgBackup_Async::queue_backup($type, 'scheduled');
+        FgBackup_Async::queue_backup($type, 'scheduled', '', '');
     }
 
     public static function deactivate() {

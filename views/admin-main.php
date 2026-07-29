@@ -3,10 +3,14 @@
 <div class="fg-backup-panel">
     <div class="fg-backup-run">
         <label for="fg-backup-type"><strong><?php esc_html_e('Neues Backup', 'fg-backup-pro'); ?></strong></label>
-        <select id="fg-backup-type">
+        <select id="fg-backup-type" <?php disabled((bool) $active_job); ?>>
             <option value="full"><?php esc_html_e('Vollständig', 'fg-backup-pro'); ?></option>
             <option value="db"><?php esc_html_e('Nur Datenbank', 'fg-backup-pro'); ?></option>
         </select>
+        <label for="fg-backup-note" class="screen-reader-text"><?php esc_html_e('Backup-Notiz', 'fg-backup-pro'); ?></label>
+        <input type="text" id="fg-backup-note" class="regular-text" maxlength="160"
+               placeholder="<?php esc_attr_e('Notiz, z. B. vor PHP-Update', 'fg-backup-pro'); ?>"
+               <?php disabled((bool) $active_job); ?>>
         <button type="button" class="button button-primary" id="fg-backup-start" <?php disabled((bool) $active_job); ?>>
             <?php esc_html_e('Backup erstellen', 'fg-backup-pro'); ?>
         </button>
@@ -62,6 +66,9 @@
             <tr>
                 <td>
                     <strong><?php echo esc_html($backup['name']); ?></strong>
+                    <?php if (!empty($backup['note'])) : ?>
+                        <span class="fg-backup-note"><?php echo esc_html($backup['note']); ?></span>
+                    <?php endif; ?>
                 </td>
                 <td><?php echo $backup['type'] === 'full' ? esc_html__('Dateien + Datenbank', 'fg-backup-pro') : esc_html__('Datenbank', 'fg-backup-pro'); ?></td>
                 <td><?php echo esc_html($backup['format_label']); ?></td>
@@ -120,6 +127,9 @@
                         esc_html_e('Vom Benutzer abgebrochen', 'fg-backup-pro');
                     } else {
                         echo !empty($entry['error']) ? esc_html($entry['error']) : esc_html($entry['file']);
+                    }
+                    if (!empty($entry['note'])) {
+                        echo '<span class="fg-backup-note">' . esc_html($entry['note']) . '</span>';
                     }
                     ?>
                 </td>

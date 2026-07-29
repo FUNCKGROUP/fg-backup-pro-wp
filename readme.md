@@ -2,7 +2,7 @@
 
 FG Backup Pro erstellt lokale WordPress-Sicherungen im geschützten FUNCKGROUP-Verzeichnis und wird über FG Core im WordPress-Admin eingebunden.
 
-## Version 1.1.0
+## Version 1.1.1
 
 - vollständige Sicherung von Dateien und Datenbank als ZIP oder TGZ
 - Datenbank-Backup als SQL, SQL.GZ oder SQL.ZIP
@@ -17,6 +17,8 @@ FG Backup Pro erstellt lokale WordPress-Sicherungen im geschützten FUNCKGROUP-V
 - tägliche, wöchentliche oder monatliche Planung
 - Erkennung klassischer WordPress- und Bedrock-Strukturen
 - Integration in FG Core 1.1.3
+- Speicherplatzprüfung vor Datenbankexport und vor der Archivierung
+- optionale Backup-Notiz für manuelle Sicherungen
 - Unterstützung durch FG GitHub Update
 
 Remote-Speicherziele sind für Version 2 vorgesehen.
@@ -112,6 +114,15 @@ https://github.com/FUNCKGROUP/fg-backup-pro-wp
 ```
 
 Der Release-Ordner muss `fg-backup-pro-wp` heißen und die Hauptdatei `fg-backup-pro.php` enthalten.
+
+
+## Speicherplatzprüfung
+
+Vor dem Datenbankexport prüft FG Backup Pro den verfügbaren Speicher gegen eine konservative Schätzung für SQL-Datei, Komprimierung und temporäre Dateien. Bei vollständigen Backups wird nach dem Dateiscan ein zweites Mal anhand der tatsächlich erfassten Dateigröße geprüft. TGZ benötigt vorübergehend mehr Speicher, weil TAR und komprimiertes Archiv parallel vorhanden sind. Ist der freie Speicher nicht zuverlässig ermittelbar, wird das Backup nicht allein deshalb blockiert.
+
+## Backup-Notiz
+
+Manuelle Backups können mit einer optionalen Notiz von bis zu 160 Zeichen versehen werden, zum Beispiel `Vor PHP-Update auf 8.3`. Die Notiz erscheint unter der Datei und in der Laufhistorie und wird bei vollständigen Backups zusätzlich in `fg-backup.json` gespeichert.
 
 ## Changelog
 

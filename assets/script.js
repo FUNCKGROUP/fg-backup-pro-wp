@@ -5,6 +5,7 @@
         var $button = $('#fg-backup-start');
         var $cancelButton = $('#fg-backup-cancel');
         var $type = $('#fg-backup-type');
+        var $note = $('#fg-backup-note');
         var $status = $('#fg-backup-status');
         var $stage = $status.find('.fg-backup-stage');
         var $detail = $status.find('.fg-backup-detail');
@@ -196,6 +197,8 @@
 
         function setRunning(running) {
             $button.prop('disabled', running);
+            $type.prop('disabled', running);
+            $note.prop('disabled', running);
             if (running) {
                 $cancelButton.removeAttr('hidden').prop('disabled', false);
                 updateAdminBar({status: 'queued', progress: 0, stage: 'Backup startet'});
@@ -272,7 +275,8 @@
             $.post(fgBackupPro.ajaxUrl, {
                 action: 'fg_backup_start',
                 security: fgBackupPro.nonce,
-                backup_type: $type.val()
+                backup_type: $type.val(),
+                backup_note: $note.val()
             }).done(function (response) {
                 if (!response || !response.success) {
                     showStatus(fgBackupPro.failedText, response && response.data && response.data.message ? response.data.message : '', 0);

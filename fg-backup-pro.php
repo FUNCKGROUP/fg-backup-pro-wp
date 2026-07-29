@@ -3,7 +3,7 @@
  * Plugin Name: FG Backup Pro
  * Plugin URI: https://github.com/FUNCKGROUP/fg-backup-pro-wp
  * Description: Sichere lokale WordPress-Backups mit asynchroner Verarbeitung, Prüfung und Rotation.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: FUNCKGROUP - Benedict von Funck
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -14,7 +14,7 @@
 
 defined('ABSPATH') || exit;
 
-define('FG_BACKUP_VERSION', '1.1.0');
+define('FG_BACKUP_VERSION', '1.1.1');
 define('FG_BACKUP_FILE', __FILE__);
 define('FG_BACKUP_DIR', plugin_dir_path(__FILE__));
 define('FG_BACKUP_URL', plugin_dir_url(__FILE__));
