@@ -1,27 +1,27 @@
 # FG Backup Pro
 
-FG Backup Pro erstellt lokale WordPress-Sicherungen im geschützten FUNCKGROUP-Verzeichnis und wird über FG Core im WordPress-Admin eingebunden.
+FG Backup Pro erstellt lokale WordPress-Sicherungen im geschützten FUNCKGROUP-Verzeichnis und kann fertige Backups anschließend per SFTP übertragen. Die Verwaltung erfolgt über FG Core im WordPress-Admin.
 
-## Version 1.1.1
+## Version 2.0.0 – Test-Build
 
-- vollständige Sicherung von Dateien und Datenbank als ZIP oder TGZ
-- Datenbank-Backup als SQL, SQL.GZ oder SQL.ZIP
-- frei definierbares Dateinamensmuster mit Platzhaltern
-- sichtbarer Live-Status mit Arbeitsschritt und Fortschritt
-- laufende Sicherungen werden zusätzlich in der WordPress-Adminleiste angezeigt
-- laufende Backups können kontrolliert abgebrochen werden
-- asynchrone Verarbeitung in kleinen, aktiv angestoßenen WP-Cron-Schritten
-- strukturelle Prüfung des fertigen Backups
-- geschützter Download über WordPress
-- automatische Rotation und Job-Historie
-- tägliche, wöchentliche oder monatliche Planung
-- Erkennung klassischer WordPress- und Bedrock-Strukturen
-- Integration in FG Core 1.1.3
-- Speicherplatzprüfung vor Datenbankexport und vor der Archivierung
-- optionale Backup-Notiz für manuelle Sicherungen
-- Unterstützung durch FG GitHub Update
+- alle Funktionen aus Version 1.1.1
+- SFTP über phpseclib 3
+- Anmeldung mit Passwort oder privatem SSH-Schlüssel
+- optionale Key-Passphrase
+- verschlüsselte Speicherung von Passwort und Passphrase
+- alternativ sensible Werte über Konstanten in `wp-config.php`
+- Prüfung und feste Speicherung des SSH-Serverschlüssels
+- Schreib-, Größen- und Löschtest beim Verbindungstest
+- Upload in Blöcken mit Fortschritt und kontrolliertem Abbruch
+- unvollständige Remote-Dateien erhalten vorübergehend die Endung `.part`
+- Größenprüfung vor und nach dem finalen Umbenennen
+- Remote-Rotation
+- Remote-Dateiliste auf Abruf und geschütztes Löschen
+- lokale Datei nach erfolgreichem Upload wahlweise behalten oder löschen
+- bei einem SFTP-Fehler bleibt das bereits geprüfte lokale Backup erhalten
+- deutlich sichtbare Speicherbedarfsschätzung vor dem Start
 
-Remote-Speicherziele sind für Version 2 vorgesehen.
+S3, WebDAV, Dropbox, Google Drive und OneDrive sind noch nicht Bestandteil dieses Test-Builds.
 
 ## Voraussetzungen
 
@@ -31,8 +31,72 @@ Remote-Speicherziele sind für Version 2 vorgesehen.
 - `ZipArchive` für ZIP und SQL.ZIP
 - `PharData` und GZIP/Zlib für TGZ
 - GZIP/Zlib für SQL.GZ
+- Composer für den Entwicklungs- beziehungsweise Source-Build
 
-Nicht verfügbare Formate werden in der Oberfläche deaktiviert. TGZ wird zunächst als unkomprimiertes TAR aufgebaut und anschließend mit GZIP komprimiert; bei großen Installationen ist es deshalb meist deutlich langsamer als ZIP.
+## Composer
+
+Composer liegt im Root des Plugins. Version 2.0 benötigt phpseclib für SFTP und synchronisiert weiterhin FG Core:
+
+```bash
+composer update
+composer audit
+```
+
+Die Plattform ist in `composer.json` auf PHP 7.4 gesetzt, damit der erzeugte Abhängigkeitsstand auch auf älteren PHP-7.4-Projekten einsetzbar bleibt.
+
+Eine fertige Release-ZIP muss enthalten:
+
+```text
+composer.json
+composer.lock
+vendor/                  Runtime-Abhängigkeiten einschließlich phpseclib
+includes/fg-core/        synchronisierter FG Core
+```
+
+`vendor/funckgroup/fg-core/` ist nur für Entwicklung und Synchronisierung erforderlich. Auf einer WordPress-Installation ist Composer nicht nötig, wenn eine vollständige Release-ZIP verwendet wird.
+
+## SFTP einrichten
+
+1. SFTP-Einstellungen speichern.
+2. `Verbindung testen` ausführen.
+3. Den angezeigten SSH-Host-Key beziehungsweise Fingerprint prüfen.
+4. SFTP aktivieren.
+5. Ein kleines Datenbank-Backup testen.
+
+Beim ersten erfolgreichen Verbindungstest wird der öffentliche SSH-Serverschlüssel fest gespeichert. Ändert er sich später, wird die Verbindung blockiert, bis der gespeicherte Schlüssel bewusst zurückgesetzt und erneut geprüft wurde.
+
+Das Zielverzeichnis unterstützt:
+
+```text
+%host   Domain der WordPress-Installation
+%site   Website-Titel
+```
+
+Beispiel:
+
+```text
+/backups/%host
+```
+
+### Zugangsdaten über wp-config.php
+
+```php
+define('FG_BACKUP_SFTP_PASSWORD', '...');
+define('FG_BACKUP_SFTP_PRIVATE_KEY_PATH', '/absoluter/pfad/backup_ed25519');
+define('FG_BACKUP_SFTP_KEY_PASSPHRASE', '...');
+```
+
+Nur die zur gewählten Anmeldeart benötigten Konstanten müssen gesetzt werden.
+
+## SFTP-Verhalten
+
+Das lokale Backup wird zuerst vollständig erstellt und geprüft. Erst danach startet der SFTP-Upload. Während des Uploads wird eine temporäre Datei mit `.part` verwendet. Nach vollständiger Größenprüfung wird sie in den endgültigen Dateinamen umbenannt.
+
+Wird der Upload abgebrochen oder schlägt er fehl, wird die `.part`-Datei nach Möglichkeit entfernt. Das geprüfte lokale Backup bleibt erhalten. Die lokale Datei wird nur gelöscht, wenn der SFTP-Upload vollständig erfolgreich war und die entsprechende Option deaktiviert ist.
+
+## Speicherbedarf
+
+Auf der Backup-Seite wird vor dem Start der geschätzte temporäre Speicherbedarf für den gewählten Backup-Typ deutlich angezeigt. Bei vollständigen Backups ist dies zunächst eine Startreserve. Nach dem Dateiscan erfolgt zusätzlich eine genauere Prüfung anhand der tatsächlich erfassten Dateigröße.
 
 ## Dateinamen
 
@@ -61,10 +125,6 @@ Platzhalter:
 
 Die passende Dateiendung wird automatisch ergänzt.
 
-## Status
-
-Ein Backup gilt erst als abgeschlossen, wenn das Archiv beziehungsweise die SQL-Sicherung lesbar ist, die erwarteten Pflichtdateien enthält und in den endgültigen Backup-Ordner verschoben wurde. Während des Laufs werden Arbeitsschritt, Detail und Fortschritt auf der Backup-Seite sowie der aktuelle Fortschritt in der WordPress-Adminleiste angezeigt. Ein laufender Job kann über `Abbrechen` beendet werden; ein noch nicht aktiver Arbeitsschritt wird sofort abgebrochen, während ein bereits laufender Arbeitsschritt kontrolliert ausläuft. Temporäre Dateien werden anschließend entfernt. Danach erscheint der Eintrag mit dem Status `Abgeschlossen` oder `Abgebrochen`. Die Prüfung kontrolliert die Archivstruktur und die Pflichtinhalte; sie vergleicht nicht jede einzelne Quelldatei bytegenau.
-
 ## Speicherort
 
 ```text
@@ -74,36 +134,6 @@ wp-content/.fg-private/fg-backup-pro/
 ```
 
 FG Backup Pro ergänzt fehlende Schutzdateien, überschreibt aber keine vorhandenen Schutzdateien in `.fg-private`.
-
-Alte lokale Sicherungen aus `wp-content/fg-backup-pro/` oder `wp-content/backups/` werden beim Update in den neuen Ordner verschoben.
-
-## Composer
-
-Composer liegt im Root des Plugins und dient der Entwicklung sowie der Synchronisierung von FG Core.
-
-```bash
-composer update funckgroup/fg-core
-composer audit
-```
-
-Der eingebettete Runtime-Core liegt unter:
-
-```text
-includes/fg-core/
-```
-
-Auf der WordPress-Installation wird Composer nicht benötigt.
-
-## Standardmäßig ausgeschlossene Verzeichnisse
-
-- `.git`
-- `.svn`
-- `node_modules`
-- WordPress-Cache- und Upgrade-Verzeichnisse
-- bekannte Backup-Verzeichnisse anderer Plugins
-- `wp-content/.fg-private`
-
-Zusätzliche Pfadteile können in den Einstellungen zeilenweise eingetragen werden.
 
 ## GitHub Update
 
@@ -115,15 +145,6 @@ https://github.com/FUNCKGROUP/fg-backup-pro-wp
 
 Der Release-Ordner muss `fg-backup-pro-wp` heißen und die Hauptdatei `fg-backup-pro.php` enthalten.
 
-
-## Speicherplatzprüfung
-
-Vor dem Datenbankexport prüft FG Backup Pro den verfügbaren Speicher gegen eine konservative Schätzung für SQL-Datei, Komprimierung und temporäre Dateien. Bei vollständigen Backups wird nach dem Dateiscan ein zweites Mal anhand der tatsächlich erfassten Dateigröße geprüft. TGZ benötigt vorübergehend mehr Speicher, weil TAR und komprimiertes Archiv parallel vorhanden sind. Ist der freie Speicher nicht zuverlässig ermittelbar, wird das Backup nicht allein deshalb blockiert.
-
-## Backup-Notiz
-
-Manuelle Backups können mit einer optionalen Notiz von bis zu 160 Zeichen versehen werden, zum Beispiel `Vor PHP-Update auf 8.3`. Die Notiz erscheint unter der Datei und in der Laufhistorie und wird bei vollständigen Backups zusätzlich in `fg-backup.json` gespeichert.
-
 ## Changelog
 
-Die Änderungen der veröffentlichten Versionen stehen in [`CHANGELOG.md`](CHANGELOG.md).
+Die Änderungen stehen in [`CHANGELOG.md`](CHANGELOG.md).

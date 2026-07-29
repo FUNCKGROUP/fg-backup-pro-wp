@@ -2,8 +2,8 @@
 /**
  * Plugin Name: FG Backup Pro
  * Plugin URI: https://github.com/FUNCKGROUP/fg-backup-pro-wp
- * Description: Sichere lokale WordPress-Backups mit asynchroner Verarbeitung, Prüfung und Rotation.
- * Version: 1.1.1
+ * Description: Sichere WordPress-Backups mit asynchroner Verarbeitung, Prüfung, Rotation und SFTP.
+ * Version: 2.0.0
  * Author: FUNCKGROUP - Benedict von Funck
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -14,16 +14,23 @@
 
 defined('ABSPATH') || exit;
 
-define('FG_BACKUP_VERSION', '1.1.1');
+define('FG_BACKUP_VERSION', '2.0.0');
 define('FG_BACKUP_FILE', __FILE__);
 define('FG_BACKUP_DIR', plugin_dir_path(__FILE__));
 define('FG_BACKUP_URL', plugin_dir_url(__FILE__));
+
+$autoload = FG_BACKUP_DIR . 'vendor/autoload.php';
+if (is_readable($autoload)) {
+    require_once $autoload;
+}
 
 $core_bootstrap = FG_BACKUP_DIR . 'includes/fg-core/bootstrap.php';
 if (is_readable($core_bootstrap)) {
     require_once $core_bootstrap;
 }
 
+require_once FG_BACKUP_DIR . 'inc/class-fgbackup-secrets.php';
+require_once FG_BACKUP_DIR . 'inc/class-fgbackup-sftp.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-storage.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-backup.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-cleanup.php';
@@ -41,7 +48,7 @@ function fg_backup_pro_register_with_core() {
         'slug'        => 'fg-backup-pro',
         'title'       => __('FG Backup Pro', 'fg-backup-pro'),
         'menu_title'  => __('FG Backup Pro', 'fg-backup-pro'),
-        'description' => __('Lokale Sicherungen, Zeitplanung und Backup-Prüfung.', 'fg-backup-pro'),
+        'description' => __('Lokale Sicherungen, Zeitplanung, Backup-Prüfung und SFTP.', 'fg-backup-pro'),
         'version'     => FG_BACKUP_VERSION,
         'plugin_file' => FG_BACKUP_FILE,
         'default_tab' => 'backups',
@@ -56,6 +63,11 @@ function fg_backup_pro_register_with_core() {
                 'title'    => __('Einstellungen', 'fg-backup-pro'),
                 'callback' => ['FgBackup_Admin', 'render_settings_page'],
                 'position' => 20,
+            ],
+            'sftp' => [
+                'title'    => __('SFTP', 'fg-backup-pro'),
+                'callback' => ['FgBackup_Admin', 'render_sftp_page'],
+                'position' => 30,
             ],
         ],
     ]);

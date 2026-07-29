@@ -19,6 +19,13 @@
         var $defaultType = $('#fg-backup-default-type');
         var $archiveFormat = $('#fg-backup-archive-format');
         var $databaseFormat = $('#fg-backup-database-format');
+        var $spaceEstimate = $('#fg-backup-space-estimate');
+        var $sftpAuth = $('#fg-backup-sftp-auth');
+        var $sftpResult = $('#fg-backup-sftp-result');
+        var $sftpListButton = $('#fg-backup-sftp-list');
+        var $sftpListResult = $('#fg-backup-sftp-list-result');
+        var $sftpTable = $('#fg-backup-sftp-table');
+        var $sftpTableBody = $sftpTable.find('tbody');
 
         function trimFilename(value) {
             return value.replace(/^[ ._-]+|[ ._-]+$/g, '');
@@ -111,6 +118,86 @@
             }
 
             $filenamePreview.text(base + filenameExtension(type, format));
+        }
+
+        function formatLocalized(template, value) {
+            return String(template || '%s').replace(/%1?\$?s/, value);
+        }
+
+        function updateSpaceEstimate() {
+            if (!$spaceEstimate.length) {
+                return;
+            }
+            var type = $type.val() === 'db' ? 'db' : 'full';
+            var required = $spaceEstimate.data(type + '-required') || '';
+            var available = $spaceEstimate.data('available') || '';
+            var template = type === 'full' ? fgBackupPro.spaceFullText : fgBackupPro.spaceDbText;
+            $spaceEstimate.find('.fg-backup-space-text').text(formatLocalized(template, required));
+            $spaceEstimate.find('.fg-backup-space-available').text(formatLocalized(fgBackupPro.spaceAvailableText, available));
+        }
+
+        function toggleSftpAuth() {
+            if (!$sftpAuth.length) {
+                return;
+            }
+            var keyMode = $sftpAuth.val() === 'key';
+            $('.fg-backup-sftp-password-row').toggle(!keyMode);
+            $('.fg-backup-sftp-key-row').toggle(keyMode);
+        }
+
+
+        function renderSftpFiles(files) {
+            $sftpTableBody.empty();
+            if (!files || !files.length) {
+                $sftpTable.attr('hidden', 'hidden');
+                $sftpListResult.removeClass('is-error').text(fgBackupPro.sftpListEmptyText || 'Keine Remote-Backups gefunden.');
+                return;
+            }
+
+            files.forEach(function (file) {
+                var $delete = $('<button>', {
+                    type: 'button',
+                    class: 'button-link-delete fg-backup-sftp-delete',
+                    text: fgBackupPro.sftpDeleteText || 'Löschen'
+                }).attr('data-file', file.name || '');
+
+                $('<tr>').append(
+                    $('<td>').append($('<strong>').text(file.name || '')),
+                    $('<td>').text(file.size || ''),
+                    $('<td>').text(file.date || ''),
+                    $('<td>').append($delete)
+                ).appendTo($sftpTableBody);
+            });
+
+            $sftpTable.removeAttr('hidden');
+        }
+
+        function loadSftpFiles() {
+            if (!$sftpListButton.length) {
+                return;
+            }
+
+            $sftpListButton.prop('disabled', true);
+            $sftpListResult.removeClass('is-error is-success').text(fgBackupPro.sftpListLoadingText || 'Remote-Dateien werden geladen …');
+
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_sftp_list',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $sftpTable.attr('hidden', 'hidden');
+                    $sftpListResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                renderSftpFiles(response.data.files || []);
+                if (response.data.files && response.data.files.length) {
+                    $sftpListResult.addClass('is-success').text(response.data.directory || '');
+                }
+            }).fail(function () {
+                $sftpListResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $sftpListButton.prop('disabled', false);
+            });
         }
 
         function closeFilenamePopover() {
@@ -227,8 +314,10 @@
                 updateAdminBar(job);
 
                 if (job.status === 'completed') {
-                    var detail = job.file || '';
-                    if (job.size) {
+                    var detail = job.file || job.remote_path || '';
+                    if (job.local_deleted) {
+                        detail = (job.remote_path ? 'SFTP: ' + job.remote_path + ' · ' : '') + (fgBackupPro.localDeletedText || 'Lokal gelöscht.');
+                    } else if (job.size) {
                         detail += (detail ? ' · ' : '') + job.size;
                     }
                     showStatus(job.stage, detail, 100);
@@ -324,6 +413,9 @@
             poll(currentJobId);
         }
 
+        $type.on('change', updateSpaceEstimate);
+        updateSpaceEstimate();
+
         $filenamePattern.on('input', updateFilenamePreview);
         $defaultType.add($archiveFormat).add($databaseFormat).on('change', updateFilenamePreview);
         updateFilenamePreview();
@@ -350,6 +442,80 @@
                 closeFilenamePopover();
                 $filenameHelp.trigger('focus');
             }
+        });
+
+        $sftpAuth.on('change', toggleSftpAuth);
+        toggleSftpAuth();
+
+        $('#fg-backup-sftp-test').on('click', function () {
+            var $test = $(this);
+            $test.prop('disabled', true);
+            $sftpResult.removeClass('is-error is-success').text(fgBackupPro.sftpTestText || 'Verbindung wird getestet …');
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_sftp_test',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $sftpResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                $sftpResult.addClass('is-success').text(response.data.message + ' · ' + response.data.fingerprint);
+                window.setTimeout(function () { window.location.reload(); }, 1200);
+            }).fail(function () {
+                $sftpResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $test.prop('disabled', false);
+            });
+        });
+
+        $('#fg-backup-sftp-reset-key').on('click', function () {
+            if (!window.confirm(fgBackupPro.sftpResetConfirmText || 'Serverschlüssel zurücksetzen?')) {
+                return;
+            }
+            var $reset = $(this);
+            $reset.prop('disabled', true);
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_sftp_reset_key',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $sftpResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                $sftpResult.removeClass('is-error').addClass('is-success').text(response.data.message);
+                window.setTimeout(function () { window.location.reload(); }, 800);
+            }).always(function () {
+                $reset.prop('disabled', false);
+            });
+        });
+
+        $sftpListButton.on('click', loadSftpFiles);
+
+        $sftpTable.on('click', '.fg-backup-sftp-delete', function () {
+            var $delete = $(this);
+            var file = String($delete.attr('data-file') || '');
+            if (!file || !window.confirm(fgBackupPro.sftpDeleteConfirmText || 'Remote-Backup wirklich löschen?')) {
+                return;
+            }
+
+            $delete.prop('disabled', true);
+            $sftpListResult.removeClass('is-error is-success').text('');
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_sftp_delete',
+                security: fgBackupPro.nonce,
+                file: file
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $sftpListResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    $delete.prop('disabled', false);
+                    return;
+                }
+                $sftpListResult.addClass('is-success').text(response.data.message || '');
+                loadSftpFiles();
+            }).fail(function () {
+                $sftpListResult.addClass('is-error').text(fgBackupPro.failedText);
+                $delete.prop('disabled', false);
+            });
         });
 
         $('.fg-backup-delete').on('click', function (event) {

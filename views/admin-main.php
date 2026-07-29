@@ -19,6 +19,21 @@
         </button>
     </div>
 
+    <div class="fg-backup-space-estimate" id="fg-backup-space-estimate"
+         data-full-required="<?php echo esc_attr(size_format((int) $full_space['required'], 1)); ?>"
+         data-db-required="<?php echo esc_attr(size_format((int) $db_space['required'], 1)); ?>"
+         data-available="<?php echo esc_attr($full_space['available'] > 0 ? size_format((int) $full_space['available'], 1) : __('nicht ermittelbar', 'fg-backup-pro')); ?>">
+        <span class="fg-backup-space-label"><?php esc_html_e('Speicherbedarf vor dem Start', 'fg-backup-pro'); ?></span>
+        <strong class="fg-backup-space-text"><?php echo esc_html(sprintf(
+            __('Vollständiges Backup: mindestens %1$s temporärer Speicher; nach dem Dateiscan erfolgt eine genauere Prüfung.', 'fg-backup-pro'),
+            size_format((int) $full_space['required'], 1)
+        )); ?></strong>
+        <span class="fg-backup-space-available"><?php echo esc_html(sprintf(
+            __('Frei: %s', 'fg-backup-pro'),
+            $full_space['available'] > 0 ? size_format((int) $full_space['available'], 1) : __('nicht ermittelbar', 'fg-backup-pro')
+        )); ?></span>
+    </div>
+
     <div id="fg-backup-status" class="fg-backup-status" <?php echo $active_job ? '' : 'hidden'; ?>>
         <div class="fg-backup-progress"><span style="width: <?php echo $active_job ? esc_attr((int) $active_job['progress']) : 0; ?>%"></span></div>
         <div class="fg-backup-status-line">
@@ -124,9 +139,25 @@
                 <td>
                     <?php
                     if ($entry['status'] === 'canceled') {
-                        esc_html_e('Vom Benutzer abgebrochen', 'fg-backup-pro');
+                        if (!empty($entry['file'])) {
+                            echo esc_html(sprintf(__('SFTP-Upload abgebrochen; lokale Datei vorhanden: %s', 'fg-backup-pro'), $entry['file']));
+                        } else {
+                            esc_html_e('Vom Benutzer abgebrochen', 'fg-backup-pro');
+                        }
+                    } elseif (!empty($entry['error'])) {
+                        echo esc_html($entry['error']);
+                        if (!empty($entry['file'])) {
+                            echo '<span class="fg-backup-note">' . esc_html(sprintf(__('Lokale Datei vorhanden: %s', 'fg-backup-pro'), $entry['file'])) . '</span>';
+                        }
                     } else {
-                        echo !empty($entry['error']) ? esc_html($entry['error']) : esc_html($entry['file']);
+                        if (!empty($entry['file'])) {
+                            echo esc_html($entry['file']);
+                        } elseif (!empty($entry['local_deleted'])) {
+                            esc_html_e('Lokal nach SFTP-Upload gelöscht', 'fg-backup-pro');
+                        }
+                        if (!empty($entry['remote_path'])) {
+                            echo '<span class="fg-backup-note">' . esc_html(sprintf(__('SFTP: %s', 'fg-backup-pro'), $entry['remote_path'])) . '</span>';
+                        }
                     }
                     if (!empty($entry['note'])) {
                         echo '<span class="fg-backup-note">' . esc_html($entry['note']) . '</span>';

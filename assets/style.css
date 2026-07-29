@@ -212,3 +212,76 @@
     font-size: 12px;
     line-height: 1.4;
 }
+
+.fg-backup-inline-result {
+    display: inline-block;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+
+.fg-backup-inline-result.is-success {
+    color: #008a20;
+}
+
+.fg-backup-inline-result.is-error {
+    color: #b32d2e;
+}
+
+#fg-backup-sftp-key-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.fg-backup-space-estimate {
+    display: grid;
+    grid-template-columns: max-content minmax(280px, 1fr) max-content;
+    align-items: center;
+    gap: 8px 16px;
+    margin: 14px 0 0;
+    padding: 10px 12px;
+    border-left: 4px solid #2271b1;
+    background: #f0f6fc;
+    color: #1d2327;
+}
+
+.fg-backup-space-label {
+    font-weight: 600;
+}
+
+.fg-backup-space-text {
+    font-weight: 400;
+}
+
+.fg-backup-space-available {
+    white-space: nowrap;
+    color: #50575e;
+}
+
+.fg-backup-section-divider {
+    margin: 28px 0 22px;
+}
+
+.fg-backup-remote-section {
+    max-width: 1100px;
+}
+
+#fg-backup-sftp-table[hidden] {
+    display: none;
+}
+
+#fg-backup-sftp-table td:first-child {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+    .fg-backup-space-estimate {
+        grid-template-columns: 1fr;
+        gap: 5px;
+    }
+
+    .fg-backup-space-available {
+        white-space: normal;
+    }
+}

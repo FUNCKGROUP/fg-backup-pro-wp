@@ -12,6 +12,10 @@ class FgBackup_Admin {
         add_action('wp_ajax_fg_backup_start', [__CLASS__, 'ajax_start']);
         add_action('wp_ajax_fg_backup_status', [__CLASS__, 'ajax_status']);
         add_action('wp_ajax_fg_backup_cancel', [__CLASS__, 'ajax_cancel']);
+        add_action('wp_ajax_fg_backup_sftp_test', [__CLASS__, 'ajax_sftp_test']);
+        add_action('wp_ajax_fg_backup_sftp_reset_key', [__CLASS__, 'ajax_sftp_reset_key']);
+        add_action('wp_ajax_fg_backup_sftp_list', [__CLASS__, 'ajax_sftp_list']);
+        add_action('wp_ajax_fg_backup_sftp_delete', [__CLASS__, 'ajax_sftp_delete']);
         add_action('admin_post_fg_backup_download', [__CLASS__, 'download']);
         add_action('admin_post_fg_backup_delete', [__CLASS__, 'delete']);
     }
@@ -55,6 +59,19 @@ class FgBackup_Admin {
             'fg_backup_rotation' => 5,
             'fg_backup_notifications' => 0,
             'fg_backup_exclusions' => '',
+            'fg_backup_sftp_enabled' => 0,
+            'fg_backup_sftp_host' => '',
+            'fg_backup_sftp_port' => 22,
+            'fg_backup_sftp_username' => '',
+            'fg_backup_sftp_auth' => 'password',
+            'fg_backup_sftp_password' => '',
+            'fg_backup_sftp_private_key_path' => '',
+            'fg_backup_sftp_key_passphrase' => '',
+            'fg_backup_sftp_remote_dir' => '/backups/%host',
+            'fg_backup_sftp_retention' => 10,
+            'fg_backup_sftp_keep_local' => 1,
+            'fg_backup_sftp_host_key' => '',
+            'fg_backup_sftp_host_key_target' => '',
         ];
 
         foreach ($defaults as $name => $value) {
@@ -141,6 +158,41 @@ class FgBackup_Admin {
             'sanitize_callback' => 'sanitize_textarea_field',
             'default' => '',
         ]);
+
+
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_enabled', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_host', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_sftp_host'], 'default' => '',
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_port', [
+            'type' => 'integer', 'sanitize_callback' => [__CLASS__, 'sanitize_sftp_port'], 'default' => 22,
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_username', [
+            'type' => 'string', 'sanitize_callback' => 'sanitize_text_field', 'default' => '',
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_auth', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_sftp_auth'], 'default' => 'password',
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_password', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_sftp_password'], 'default' => '',
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_private_key_path', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_private_key_path'], 'default' => '',
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_key_passphrase', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_sftp_passphrase'], 'default' => '',
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_remote_dir', [
+            'type' => 'string', 'sanitize_callback' => ['FgBackup_Sftp', 'sanitize_remote_dir'], 'default' => '/backups/%host',
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_retention', [
+            'type' => 'integer', 'sanitize_callback' => [__CLASS__, 'sanitize_sftp_retention'], 'default' => 10,
+        ]);
+        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_keep_local', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 1,
+        ]);
     }
 
     public static function sanitize_type($value) {
@@ -173,6 +225,59 @@ class FgBackup_Admin {
         return in_array($value, $allowed, true) ? $value : 5;
     }
 
+
+    public static function sanitize_sftp_host($value) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+
+        $probe = strpos($value, '://') === false ? 'sftp://' . $value : $value;
+        $host = wp_parse_url($probe, PHP_URL_HOST);
+        if (!is_string($host) || $host === '') {
+            $host = preg_replace('/^.*@/', '', $value);
+            $host = preg_replace('#[/:].*$#', '', (string) $host);
+        }
+
+        return trim(sanitize_text_field((string) $host), '[]');
+    }
+
+    public static function sanitize_sftp_port($value) {
+        return max(1, min(65535, (int) $value));
+    }
+
+    public static function sanitize_sftp_auth($value) {
+        return $value === 'key' ? 'key' : 'password';
+    }
+
+    public static function sanitize_private_key_path($value) {
+        return trim(wp_normalize_path((string) $value));
+    }
+
+    public static function sanitize_sftp_retention($value) {
+        return max(1, min(100, (int) $value));
+    }
+
+    public static function sanitize_sftp_password($value) {
+        return self::sanitize_secret_option($value, 'fg_backup_sftp_password');
+    }
+
+    public static function sanitize_sftp_passphrase($value) {
+        return self::sanitize_secret_option($value, 'fg_backup_sftp_key_passphrase');
+    }
+
+    private static function sanitize_secret_option($value, $option) {
+        $value = (string) $value;
+        if ($value === '') {
+            return (string) get_option($option, '');
+        }
+        try {
+            return FgBackup_Secrets::encrypt($value);
+        } catch (Throwable $exception) {
+            add_settings_error('fg_backup_sftp_settings', 'fg_backup_secret_error', $exception->getMessage(), 'error');
+            return (string) get_option($option, '');
+        }
+    }
 
     public static function sanitize_note($value) {
         $value = preg_replace('/\s+/u', ' ', wp_strip_all_tags((string) $value));
@@ -218,6 +323,16 @@ class FgBackup_Admin {
             'nonce' => wp_create_nonce('fg_backup_ajax'),
             'failedText' => __('Backup fehlgeschlagen.', 'fg-backup-pro'),
             'cancelConfirmText' => __('Laufendes Backup wirklich abbrechen?', 'fg-backup-pro'),
+            'sftpTestText' => __('SFTP-Verbindung wird getestet …', 'fg-backup-pro'),
+            'sftpResetConfirmText' => __('Gespeicherten SFTP-Serverschlüssel wirklich zurücksetzen?', 'fg-backup-pro'),
+            'sftpListLoadingText' => __('Remote-Dateien werden geladen …', 'fg-backup-pro'),
+            'sftpListEmptyText' => __('Keine Remote-Backups gefunden.', 'fg-backup-pro'),
+            'sftpDeleteConfirmText' => __('Remote-Backup wirklich löschen?', 'fg-backup-pro'),
+            'sftpDeleteText' => __('Löschen', 'fg-backup-pro'),
+            'spaceFullText' => __('Vollständiges Backup: mindestens %1$s temporärer Speicher; nach dem Dateiscan erfolgt eine genauere Prüfung.', 'fg-backup-pro'),
+            'spaceDbText' => __('Datenbank-Backup: voraussichtlich %1$s temporärer Speicher.', 'fg-backup-pro'),
+            'spaceAvailableText' => __('Frei: %s', 'fg-backup-pro'),
+            'localDeletedText' => __('Lokal nach erfolgreichem SFTP-Upload gelöscht.', 'fg-backup-pro'),
             'activeJobId' => is_array($active_job) && !empty($active_job['id']) ? $active_job['id'] : '',
             'pageUrl' => admin_url('admin.php?page=fg-backup-pro'),
             'filenamePreview' => [
@@ -297,6 +412,8 @@ class FgBackup_Admin {
         $backups = FgBackup_Backup::list_backups();
         $history = get_option('fg_backup_history', []);
         $active_job = FgBackup_Async::get_active_job();
+        $full_space = FgBackup_Backup::estimate_initial_space('full', get_option('fg_backup_archive_format', 'zip'));
+        $db_space = FgBackup_Backup::estimate_initial_space('db', get_option('fg_backup_database_format', 'gz'));
         include FG_BACKUP_DIR . 'views/admin-main.php';
     }
 
@@ -305,6 +422,73 @@ class FgBackup_Admin {
             return;
         }
         include FG_BACKUP_DIR . 'views/admin-settings.php';
+    }
+
+    public static function render_sftp_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $sftp_settings = FgBackup_Sftp::settings();
+        include FG_BACKUP_DIR . 'views/admin-sftp.php';
+    }
+
+    public static function ajax_sftp_test() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
+        }
+        check_ajax_referer('fg_backup_ajax', 'security');
+        try {
+            $result = FgBackup_Sftp::test_and_pin();
+            wp_send_json_success([
+                'message' => sprintf(__('Verbindung erfolgreich. Ziel: %s', 'fg-backup-pro'), $result['directory']),
+                'fingerprint' => $result['fingerprint'],
+                'target' => $result['target'],
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_sftp_reset_key() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
+        }
+        check_ajax_referer('fg_backup_ajax', 'security');
+        delete_option('fg_backup_sftp_host_key');
+        delete_option('fg_backup_sftp_host_key_target');
+        wp_send_json_success(['message' => __('Gespeicherter Serverschlüssel wurde zurückgesetzt.', 'fg-backup-pro')]);
+    }
+
+
+    public static function ajax_sftp_list() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
+        }
+        check_ajax_referer('fg_backup_ajax', 'security');
+
+        try {
+            wp_send_json_success([
+                'files' => FgBackup_Sftp::list_backups(),
+                'directory' => FgBackup_Sftp::resolved_remote_dir(),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_sftp_delete() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
+        }
+        check_ajax_referer('fg_backup_ajax', 'security');
+
+        $file = isset($_POST['file']) ? sanitize_text_field(wp_unslash($_POST['file'])) : '';
+        try {
+            FgBackup_Sftp::delete_backup($file);
+            wp_send_json_success(['message' => __('Remote-Backup wurde gelöscht.', 'fg-backup-pro')]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
     }
 
     public static function ajax_start() {
@@ -347,6 +531,9 @@ class FgBackup_Admin {
             'size' => !empty($job['size']) ? size_format((int) $job['size'], 2) : '',
             'started_at' => isset($job['started_at']) ? (int) $job['started_at'] : 0,
             'finished_at' => isset($job['finished_at']) ? (int) $job['finished_at'] : 0,
+            'remote_status' => isset($job['remote_status']) ? $job['remote_status'] : 'disabled',
+            'remote_path' => isset($job['remote_path']) ? $job['remote_path'] : '',
+            'local_deleted' => !empty($job['local_deleted']),
         ]);
     }
 
