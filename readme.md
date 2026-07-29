@@ -4,10 +4,13 @@ FG Backup Pro erstellt lokale WordPress-Sicherungen im geschützten FUNCKGROUP-V
 
 ## Version 1.1.0
 
-- vollständige Sicherung von Dateien und Datenbank
-- reines Datenbank-Backup
+- vollständige Sicherung von Dateien und Datenbank als ZIP oder TGZ
+- Datenbank-Backup als SQL, SQL.GZ oder SQL.ZIP
+- frei definierbares Dateinamensmuster mit Platzhaltern
+- sichtbarer Live-Status mit Arbeitsschritt und Fortschritt
+- laufende Backups können kontrolliert abgebrochen werden
 - asynchrone Verarbeitung in kleinen WP-Cron-Schritten
-- Prüfung des fertigen Backups und SHA-256-Prüfsumme
+- strukturelle Prüfung des fertigen Backups
 - geschützter Download über WordPress
 - automatische Rotation und Job-Historie
 - tägliche, wöchentliche oder monatliche Planung
@@ -21,10 +24,43 @@ Remote-Speicherziele sind für Version 2 vorgesehen.
 
 - WordPress 5.8 oder neuer
 - PHP 7.4 oder neuer
-- `ZipArchive` für vollständige Backups
 - Schreibzugriff auf `wp-content/.fg-private/`
+- `ZipArchive` für ZIP und SQL.ZIP
+- `PharData` und GZIP/Zlib für TGZ
+- GZIP/Zlib für SQL.GZ
 
-Datenbank-Backups funktionieren auch ohne `ZipArchive`.
+Nicht verfügbare Formate werden in der Oberfläche deaktiviert. TGZ wird zunächst als unkomprimiertes TAR aufgebaut und anschließend mit GZIP komprimiert; bei großen Installationen ist es deshalb meist deutlich langsamer als ZIP.
+
+## Dateinamen
+
+Standard:
+
+```text
+fg-%type-%host-%Y%m%d-%H%M%S
+```
+
+Platzhalter:
+
+```text
+%Y      Jahr, vierstellig
+%y      Jahr, zweistellig
+%m      Monat
+%d      Tag
+%H      Stunde
+%M      Minute
+%S      Sekunde
+%host   Domain
+%site   Website-Titel
+%type   full oder db
+%format zip, tgz, sql, sql-gz oder sql-zip
+%id     kurze Job-ID
+```
+
+Die passende Dateiendung wird automatisch ergänzt.
+
+## Status
+
+Ein Backup gilt erst als abgeschlossen, wenn das Archiv beziehungsweise die SQL-Sicherung lesbar ist, die erwarteten Pflichtdateien enthält und in den endgültigen Backup-Ordner verschoben wurde. Während des Laufs werden Arbeitsschritt, Detail und Fortschritt angezeigt. Ein laufender Job kann über `Abbrechen` beendet werden; temporäre Dateien werden anschließend entfernt. Danach erscheint der Eintrag mit dem Status `Abgeschlossen` oder `Abgebrochen`. Die Prüfung kontrolliert die Archivstruktur und die Pflichtinhalte; sie vergleicht nicht jede einzelne Quelldatei bytegenau.
 
 ## Speicherort
 

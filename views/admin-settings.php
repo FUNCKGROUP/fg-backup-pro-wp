@@ -14,6 +14,33 @@
             </td>
         </tr>
         <tr>
+            <th scope="row"><label for="fg-backup-archive-format"><?php esc_html_e('Vollständiges Backup', 'fg-backup-pro'); ?></label></th>
+            <td>
+                <select name="fg_backup_archive_format" id="fg-backup-archive-format">
+                    <option value="zip" <?php selected(get_option('fg_backup_archive_format', 'zip'), 'zip'); ?> <?php disabled(!FgBackup_Backup::supports_zip()); ?>>ZIP<?php echo !FgBackup_Backup::supports_zip() ? ' – ' . esc_html__('nicht verfügbar', 'fg-backup-pro') : ''; ?></option>
+                    <option value="tgz" <?php selected(get_option('fg_backup_archive_format', 'zip'), 'tgz'); ?> <?php disabled(!FgBackup_Backup::supports_tgz()); ?>>TGZ<?php echo !FgBackup_Backup::supports_tgz() ? ' – ' . esc_html__('nicht verfügbar', 'fg-backup-pro') : ''; ?></option>
+                </select>
+                <p class="description"><?php esc_html_e('TGZ benötigt zunächst ein unkomprimiertes TAR-Archiv und ist deshalb meist deutlich langsamer als ZIP.', 'fg-backup-pro'); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row"><label for="fg-backup-database-format"><?php esc_html_e('Datenbank-Backup', 'fg-backup-pro'); ?></label></th>
+            <td>
+                <select name="fg_backup_database_format" id="fg-backup-database-format">
+                    <option value="sql" <?php selected(get_option('fg_backup_database_format', 'gz'), 'sql'); ?>>SQL</option>
+                    <option value="gz" <?php selected(get_option('fg_backup_database_format', 'gz'), 'gz'); ?> <?php disabled(!FgBackup_Backup::supports_gzip()); ?>>SQL.GZ<?php echo !FgBackup_Backup::supports_gzip() ? ' – ' . esc_html__('nicht verfügbar', 'fg-backup-pro') : ''; ?></option>
+                    <option value="zip" <?php selected(get_option('fg_backup_database_format', 'gz'), 'zip'); ?> <?php disabled(!FgBackup_Backup::supports_zip()); ?>>SQL.ZIP<?php echo !FgBackup_Backup::supports_zip() ? ' – ' . esc_html__('nicht verfügbar', 'fg-backup-pro') : ''; ?></option>
+                </select>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row"><label for="fg-backup-filename-pattern"><?php esc_html_e('Dateiname', 'fg-backup-pro'); ?></label></th>
+            <td>
+                <input type="text" name="fg_backup_filename_pattern" id="fg-backup-filename-pattern" class="regular-text code" value="<?php echo esc_attr(get_option('fg_backup_filename_pattern', FgBackup_Backup::default_filename_pattern())); ?>">
+                <p class="description"><code>%Y %y %m %d %H %M %S %host %site %type %format %id</code></p>
+            </td>
+        </tr>
+        <tr>
             <th scope="row"><label for="fg-backup-schedule"><?php esc_html_e('Zeitplan', 'fg-backup-pro'); ?></label></th>
             <td>
                 <select name="fg_backup_schedule" id="fg-backup-schedule">

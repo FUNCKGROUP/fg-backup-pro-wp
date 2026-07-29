@@ -9,6 +9,7 @@ class FgBackup_Admin {
         add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_assets']);
         add_action('wp_ajax_fg_backup_start', [__CLASS__, 'ajax_start']);
         add_action('wp_ajax_fg_backup_status', [__CLASS__, 'ajax_status']);
+        add_action('wp_ajax_fg_backup_cancel', [__CLASS__, 'ajax_cancel']);
         add_action('admin_post_fg_backup_download', [__CLASS__, 'download']);
         add_action('admin_post_fg_backup_delete', [__CLASS__, 'delete']);
     }
@@ -26,6 +27,8 @@ class FgBackup_Admin {
     public static function maybe_upgrade() {
         if (get_option('fg_backup_version') !== FG_BACKUP_VERSION) {
             self::run_upgrade();
+        } else {
+            self::install_defaults();
         }
     }
 
@@ -42,6 +45,9 @@ class FgBackup_Admin {
     private static function install_defaults() {
         $defaults = [
             'fg_backup_type' => 'full',
+            'fg_backup_archive_format' => 'zip',
+            'fg_backup_database_format' => 'gz',
+            'fg_backup_filename_pattern' => FgBackup_Backup::default_filename_pattern(),
             'fg_backup_schedule' => 'disabled',
             'fg_backup_hour' => 2,
             'fg_backup_rotation' => 5,
@@ -93,6 +99,21 @@ class FgBackup_Admin {
             'sanitize_callback' => [__CLASS__, 'sanitize_type'],
             'default' => 'full',
         ]);
+        register_setting('fg_backup_settings', 'fg_backup_archive_format', [
+            'type' => 'string',
+            'sanitize_callback' => [__CLASS__, 'sanitize_archive_format'],
+            'default' => 'zip',
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_database_format', [
+            'type' => 'string',
+            'sanitize_callback' => [__CLASS__, 'sanitize_database_format'],
+            'default' => 'gz',
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_filename_pattern', [
+            'type' => 'string',
+            'sanitize_callback' => [__CLASS__, 'sanitize_filename_pattern'],
+            'default' => FgBackup_Backup::default_filename_pattern(),
+        ]);
         register_setting('fg_backup_settings', 'fg_backup_schedule', [
             'type' => 'string',
             'sanitize_callback' => [__CLASS__, 'sanitize_schedule'],
@@ -122,6 +143,18 @@ class FgBackup_Admin {
 
     public static function sanitize_type($value) {
         return in_array($value, ['full', 'db'], true) ? $value : 'full';
+    }
+
+    public static function sanitize_archive_format($value) {
+        return in_array($value, ['zip', 'tgz'], true) ? $value : 'zip';
+    }
+
+    public static function sanitize_database_format($value) {
+        return in_array($value, ['sql', 'gz', 'zip'], true) ? $value : 'gz';
+    }
+
+    public static function sanitize_filename_pattern($value) {
+        return FgBackup_Backup::sanitize_filename_pattern($value);
     }
 
     public static function sanitize_schedule($value) {
@@ -154,9 +187,8 @@ class FgBackup_Admin {
         wp_localize_script('fg-backup-pro', 'fgBackupPro', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('fg_backup_ajax'),
-            'runningText' => __('Backup läuft …', 'fg-backup-pro'),
             'failedText' => __('Backup fehlgeschlagen.', 'fg-backup-pro'),
-            'completedText' => __('Backup abgeschlossen.', 'fg-backup-pro'),
+            'cancelConfirmText' => __('Laufendes Backup wirklich abbrechen?', 'fg-backup-pro'),
             'activeJobId' => is_array($active_job) && !empty($active_job['id']) ? $active_job['id'] : '',
         ]);
     }
@@ -208,9 +240,36 @@ class FgBackup_Admin {
         }
 
         wp_send_json_success([
-            'status' => $job['status'],
+            'status' => isset($job['status']) ? $job['status'] : '',
             'progress' => isset($job['progress']) ? (int) $job['progress'] : 0,
+            'stage' => isset($job['stage']) ? $job['stage'] : '',
+            'detail' => isset($job['detail']) ? $job['detail'] : '',
             'error' => isset($job['error']) ? $job['error'] : '',
+            'file' => isset($job['file']) ? $job['file'] : '',
+            'size' => !empty($job['size']) ? size_format((int) $job['size'], 2) : '',
+            'started_at' => isset($job['started_at']) ? (int) $job['started_at'] : 0,
+            'finished_at' => isset($job['finished_at']) ? (int) $job['finished_at'] : 0,
+        ]);
+    }
+
+    public static function ajax_cancel() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
+        }
+        check_ajax_referer('fg_backup_ajax', 'security');
+
+        $job_id = isset($_POST['job_id']) ? sanitize_key(wp_unslash($_POST['job_id'])) : '';
+        $job = FgBackup_Async::request_cancel($job_id);
+
+        if (is_wp_error($job)) {
+            wp_send_json_error(['message' => $job->get_error_message()]);
+        }
+
+        wp_send_json_success([
+            'status' => $job['status'],
+            'stage' => $job['stage'],
+            'detail' => $job['detail'],
+            'progress' => isset($job['progress']) ? (int) $job['progress'] : 0,
         ]);
     }
 

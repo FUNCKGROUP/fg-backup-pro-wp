@@ -60,3 +60,23 @@
         width: 100%;
     }
 }
+
+
+.fg-backup-status-line {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 8px;
+}
+
+.fg-backup-percent {
+    white-space: nowrap;
+}
+
+.fg-backup-detail {
+    overflow-wrap: anywhere;
+}
+
+#fg-backup-cancel[hidden] {
+    display: none;
+}

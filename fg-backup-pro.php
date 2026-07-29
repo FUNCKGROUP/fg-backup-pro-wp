@@ -40,7 +40,7 @@ function fg_backup_pro_register_with_core() {
     fg_core_register_plugin([
         'slug'        => 'fg-backup-pro',
         'title'       => __('FG Backup Pro', 'fg-backup-pro'),
-        'menu_title'  => __('Backup', 'fg-backup-pro'),
+        'menu_title'  => __('FG Backup Pro', 'fg-backup-pro'),
         'description' => __('Lokale Sicherungen, Zeitplanung und Backup-Prüfung.', 'fg-backup-pro'),
         'version'     => FG_BACKUP_VERSION,
         'plugin_file' => FG_BACKUP_FILE,

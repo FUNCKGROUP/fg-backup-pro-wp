@@ -105,7 +105,7 @@ class FgBackup_Storage {
                     continue;
                 }
 
-                if (!preg_match('/\.(zip|sql)$/i', $item)) {
+                if (!preg_match('/(?:\.zip|\.sql|\.sql\.gz|\.sql\.zip|\.tgz|\.tar\.gz)$/i', $item)) {
                     continue;
                 }
 
