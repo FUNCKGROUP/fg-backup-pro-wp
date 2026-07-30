@@ -29,6 +29,13 @@
         var $webdavResult = $('#fg-backup-webdav-result');
         var $dropboxResult = $('#fg-backup-dropbox-result');
         var dropboxStatusTimer = null;
+        var $healthButton = $('#fg-backup-health-check');
+        var $healthResult = $('#fg-backup-health-result');
+        var $healthPanel = $('#fg-backup-health');
+        var $bulkForm = $('#fg-backup-bulk-form');
+        var $bulkSelectAll = $('#fg-backup-select-all');
+        var $bulkDelete = $('#fg-backup-bulk-delete');
+        var $selectionCount = $('#fg-backup-selection-count');
 
         function trimFilename(value) {
             return value.replace(/^[ ._-]+|[ ._-]+$/g, '');
@@ -305,6 +312,7 @@
         }
 
         function ensureAdminBarItem() {
+            $('#wp-admin-bar-fg-backup-pro-health').remove();
             var $item = getAdminBarItem();
             if ($item.length || !$('#wpadminbar').length) {
                 return $item;
@@ -791,6 +799,96 @@
                 $disconnect.prop('disabled', false);
             });
         });
+
+
+        function updateHealthPanel(report) {
+            if (!$healthPanel.length || !report) {
+                return;
+            }
+
+            var status = String(report.status || 'unknown');
+            $healthPanel.removeClass(function (index, className) {
+                return (className.match(/(^|\s)fg-backup-health--\S+/g) || []).join(' ');
+            }).addClass('fg-backup-health--' + status);
+            $healthPanel.find('.fg-backup-health-status-label').text(report.status_label || status);
+            $healthPanel.find('.fg-backup-health-summary').text(report.summary || '');
+
+            var $generated = $('#fg-backup-health-generated');
+            if (!$generated.length) {
+                $generated = $('<span>', { id: 'fg-backup-health-generated' }).prependTo($healthPanel.find('.fg-backup-health-actions'));
+            }
+            $generated.text(report.generated ? 'Stand: ' + report.generated : '');
+
+            $.each(report.checks || {}, function (key, check) {
+                var $check = $healthPanel.find('[data-check-key="' + key + '"]');
+                if (!$check.length) {
+                    return;
+                }
+                var checkStatus = String(check.status || 'unknown');
+                $check.removeClass(function (index, className) {
+                    return (className.match(/(^|\s)fg-backup-health-check--\S+/g) || []).join(' ');
+                }).addClass('fg-backup-health-check--' + checkStatus);
+                $check.find('.fg-backup-health-check-status').text(check.status_label || checkStatus);
+                $check.find('.fg-backup-health-check-detail').text(check.detail || '');
+            });
+        }
+
+        $healthButton.on('click', function () {
+            $healthButton.prop('disabled', true);
+            $healthResult.removeClass('is-error is-success is-warning').text(fgBackupPro.healthCheckingText || 'Backup-Status wird geprüft …');
+
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_health_check',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $healthResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+
+                updateHealthPanel(response.data);
+                var resultClass = response.data.status === 'healthy'
+                    ? 'is-success'
+                    : (response.data.status === 'critical' ? 'is-error' : 'is-warning');
+                $healthResult.addClass(resultClass)
+                    .text(response.data.message || fgBackupPro.healthCheckedText || 'Backup-Status wurde aktualisiert.');
+            }).fail(function () {
+                $healthResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $healthButton.prop('disabled', false);
+            });
+        });
+
+        function updateBulkSelection() {
+            if (!$bulkForm.length) {
+                return;
+            }
+            var $boxes = $bulkForm.find('.fg-backup-select');
+            var selected = $boxes.filter(':checked').length;
+            $bulkDelete.prop('disabled', selected === 0);
+            $bulkSelectAll.prop('checked', selected > 0 && selected === $boxes.length);
+            $bulkSelectAll.prop('indeterminate', selected > 0 && selected < $boxes.length);
+            $selectionCount.text(selected > 0 ? String(fgBackupPro.bulkSelectedText || '%d ausgewählt').replace('%d', selected) : '');
+        }
+
+        $bulkSelectAll.on('change', function () {
+            $bulkForm.find('.fg-backup-select').prop('checked', this.checked);
+            updateBulkSelection();
+        });
+
+        $bulkForm.on('change', '.fg-backup-select', updateBulkSelection);
+        $bulkForm.on('submit', function (event) {
+            var selected = $bulkForm.find('.fg-backup-select:checked').length;
+            if (!selected) {
+                event.preventDefault();
+                window.alert(fgBackupPro.bulkDeleteNoneText || 'Bitte mindestens ein Backup auswählen.');
+                return;
+            }
+            if (!window.confirm(fgBackupPro.bulkDeleteConfirmText || 'Ausgewählte Backups wirklich löschen?')) {
+                event.preventDefault();
+            }
+        });
+        updateBulkSelection();
 
         $('.fg-backup-delete').on('click', function (event) {
             if (!window.confirm('Backup wirklich löschen?')) {

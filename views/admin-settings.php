@@ -128,13 +128,20 @@ $preview_filename = FgBackup_Backup::build_filename(
             </td>
         </tr>
         <tr>
-            <th scope="row"><?php esc_html_e('E-Mail', 'fg-backup-pro'); ?></th>
+            <th scope="row"><label for="fg-backup-notification-mode"><?php esc_html_e('E-Mail-Benachrichtigungen', 'fg-backup-pro'); ?></label></th>
             <td>
-                <label>
-                    <input type="hidden" name="fg_backup_notifications" value="0">
-                    <input type="checkbox" name="fg_backup_notifications" value="1" <?php checked((int) get_option('fg_backup_notifications', 0), 1); ?>>
-                    <?php esc_html_e('Nach Erfolg oder Fehler benachrichtigen', 'fg-backup-pro'); ?>
-                </label>
+                <select name="fg_backup_notification_mode" id="fg-backup-notification-mode">
+                    <option value="off" <?php selected(get_option('fg_backup_notification_mode', 'off'), 'off'); ?>><?php esc_html_e('Deaktiviert', 'fg-backup-pro'); ?></option>
+                    <option value="errors" <?php selected(get_option('fg_backup_notification_mode', 'off'), 'errors'); ?>><?php esc_html_e('Nur bei Fehlern und Warnungen', 'fg-backup-pro'); ?></option>
+                    <option value="all" <?php selected(get_option('fg_backup_notification_mode', 'off'), 'all'); ?>><?php esc_html_e('Bei jedem abgeschlossenen Backup', 'fg-backup-pro'); ?></option>
+                </select>
+                <p class="description"><?php esc_html_e('Gesundheitswarnungen werden höchstens einmal pro Tag erneut gesendet, solange sich der Fehler nicht ändert.', 'fg-backup-pro'); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row"><label for="fg-backup-notification-email"><?php esc_html_e('Empfänger', 'fg-backup-pro'); ?></label></th>
+            <td>
+                <input type="email" name="fg_backup_notification_email" id="fg-backup-notification-email" class="regular-text" value="<?php echo esc_attr(get_option('fg_backup_notification_email', get_option('admin_email'))); ?>">
             </td>
         </tr>
         <tr>

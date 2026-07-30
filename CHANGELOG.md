@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0 – 30.07.2026
+
+- zentrale Backup-Gesundheitsanzeige auf der Backup-Seite
+- Prüfung des letzten verwendbaren und des letzten fehlgeschlagenen Backup-Laufs
+- Kontrolle der neuesten lokalen Backup-Datei auf Vorhandensein, Lesbarkeit und Größe
+- Überwachung des bestehenden Zeitplans und des nächsten WordPress-Cron-Laufs
+- Warnung bei überfälligen Sicherungen und fehlgeschlagenen automatischen Läufen
+- Erkennung möglicherweise festhängender Backup-Prozesse
+- Live-Prüfung aller aktivierten Remote-Ziele über die vorhandenen Dateilisten
+- Kontrolle, ob das zuletzt hochgeladene Remote-Backup vorhanden ist und dieselbe Dateigröße besitzt
+- täglicher automatischer Gesundheitscheck
+- Warnungen im WordPress-Admin und in der Adminleiste
+- E-Mail-Modi „deaktiviert“, „nur Fehler und Warnungen“ sowie „jeder abgeschlossene Lauf“
+- frei wählbarer E-Mail-Empfänger
+- Schutz vor wiederholten identischen Gesundheitswarnungen innerhalb von 24 Stunden
+- bestehende Benachrichtigungseinstellung wird beim Update automatisch übernommen
+
 ## 2.1.0 – 30.07.2026
 
 - generische Remote-Pipeline für mehrere gleichzeitig aktivierte Speicherziele

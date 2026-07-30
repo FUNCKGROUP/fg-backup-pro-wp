@@ -1110,6 +1110,37 @@ class FgBackup_Backup {
         return (bool) preg_match('/(?:\.zip|\.sql|\.sql\.gz|\.sql\.zip|\.tgz|\.tar\.gz)$/i', $file_name);
     }
 
+    /**
+     * Validate a backup filename without changing valid multi-part extensions.
+     *
+     * WordPress' sanitize_file_name() adds underscores to names such as
+     * "backup.db.sql.zip". That makes the sanitized value differ from the
+     * filename that is actually stored on disk. Backup filenames therefore
+     * need validation, not rewriting.
+     *
+     * @param mixed $file_name Candidate filename.
+     * @return string Valid filename or an empty string.
+     */
+    public static function normalize_backup_filename($file_name) {
+        if (!is_string($file_name)) {
+            return '';
+        }
+
+        $file_name = trim($file_name);
+        if (
+            $file_name === ''
+            || strpos($file_name, "\0") !== false
+            || strpos($file_name, '/') !== false
+            || strpos($file_name, '\\') !== false
+            || basename($file_name) !== $file_name
+            || !self::is_backup_filename($file_name)
+        ) {
+            return '';
+        }
+
+        return $file_name;
+    }
+
     private static function history_entry_for_file($file_name) {
         $history = get_option('fg_backup_history', []);
         foreach ((array) $history as $entry) {
@@ -1168,8 +1199,8 @@ class FgBackup_Backup {
     }
 
     public static function get_backup_path($file_name) {
-        $file_name = sanitize_file_name($file_name);
-        if ($file_name === '' || !self::is_backup_filename($file_name)) {
+        $file_name = self::normalize_backup_filename($file_name);
+        if ($file_name === '') {
             return false;
         }
 

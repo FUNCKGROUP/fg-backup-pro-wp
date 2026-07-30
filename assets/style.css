@@ -330,3 +330,155 @@
         width: 100%;
     }
 }
+
+.fg-backup-health {
+    margin: 20px 0;
+    padding: 18px;
+    border: 1px solid #c3c4c7;
+    border-left-width: 5px;
+    background: #fff;
+}
+
+.fg-backup-health--healthy {
+    border-left-color: #00a32a;
+}
+
+.fg-backup-health--info,
+.fg-backup-health--unknown {
+    border-left-color: #72aee6;
+}
+
+.fg-backup-health--warning {
+    border-left-color: #dba617;
+}
+
+.fg-backup-health--critical {
+    border-left-color: #d63638;
+}
+
+.fg-backup-health-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.fg-backup-health-header h2 {
+    margin: 2px 0 4px;
+    font-size: 20px;
+}
+
+.fg-backup-health-header p {
+    margin: 0;
+    color: #50575e;
+}
+
+.fg-backup-health-kicker {
+    color: #646970;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+
+.fg-backup-health-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    color: #646970;
+    font-size: 12px;
+}
+
+.fg-backup-health-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.fg-backup-health-check {
+    padding: 12px;
+    border: 1px solid #dcdcde;
+    border-top-width: 3px;
+    background: #f6f7f7;
+}
+
+.fg-backup-health-check--healthy {
+    border-top-color: #00a32a;
+}
+
+.fg-backup-health-check--info,
+.fg-backup-health-check--unknown {
+    border-top-color: #72aee6;
+}
+
+.fg-backup-health-check--warning {
+    border-top-color: #dba617;
+}
+
+.fg-backup-health-check--critical {
+    border-top-color: #d63638;
+}
+
+.fg-backup-health-check-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.fg-backup-health-check-title span {
+    color: #646970;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.fg-backup-health-check p {
+    margin: 7px 0 0;
+    color: #50575e;
+    line-height: 1.45;
+}
+
+@media (max-width: 782px) {
+    .fg-backup-health-header {
+        display: block;
+    }
+
+    .fg-backup-health-actions {
+        justify-content: flex-start;
+        margin-top: 12px;
+    }
+}
+
+#fg-backup-health {
+    scroll-margin-top: 48px;
+}
+
+.fg-backup-inline-result.is-warning {
+    color: #996800;
+}
+
+.fg-backup-bulk-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 8px;
+}
+
+#fg-backup-selection-count {
+    color: #646970;
+    font-size: 12px;
+}
+
+.fg-backup-local-table .check-column {
+    width: 2.2em;
+    padding: 8px 0 0 8px;
+    vertical-align: middle;
+}
+
+.fg-backup-local-table thead .check-column {
+    padding-top: 8px;
+}

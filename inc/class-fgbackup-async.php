@@ -788,13 +788,16 @@ class FgBackup_Async {
             $job['detail'] = isset($job['file']) ? $job['file'] : '';
         }
         $job['finished_at'] = time();
+        update_option(self::option_name($job['id']), $job, false);
         self::add_history($job);
         self::release_lock($job['id']);
         delete_option(self::cancel_option_name($job['id']));
+
+        self::refresh_health_safely();
         if ($has_remote_errors) {
-            FgBackup_Notifications::warning($job);
+            self::notify_safely('warning', $job);
         } else {
-            FgBackup_Notifications::success($job);
+            self::notify_safely('success', $job);
         }
     }
 
@@ -823,7 +826,9 @@ class FgBackup_Async {
         self::add_history($job);
         self::release_lock($job['id']);
         delete_option(self::cancel_option_name($job['id']));
-        FgBackup_Notifications::failure($job);
+
+        self::refresh_health_safely();
+        self::notify_safely('failure', $job);
     }
 
     public static function request_cancel($job_id) {
@@ -917,6 +922,25 @@ class FgBackup_Async {
         self::add_history($job);
         self::release_lock($job_id);
         delete_option(self::cancel_option_name($job_id));
+        self::refresh_health_safely();
+    }
+
+    private static function refresh_health_safely() {
+        try {
+            FgBackup_Health::refresh_after_job();
+        } catch (Throwable $exception) {
+            error_log('[FG Backup Pro] Gesundheitsprüfung nach Backup fehlgeschlagen: ' . $exception->getMessage());
+        }
+    }
+
+    private static function notify_safely($method, array $job) {
+        try {
+            if (is_callable(['FgBackup_Notifications', $method])) {
+                call_user_func(['FgBackup_Notifications', $method], $job);
+            }
+        } catch (Throwable $exception) {
+            error_log('[FG Backup Pro] Backup-Benachrichtigung fehlgeschlagen: ' . $exception->getMessage());
+        }
     }
 
     private static function add_history(array $job) {
@@ -924,6 +948,14 @@ class FgBackup_Async {
         if (!is_array($history)) {
             $history = [];
         }
+
+        $deduplicated = [];
+        foreach ($history as $entry) {
+            if (!is_array($entry) || empty($entry['id']) || $entry['id'] !== $job['id']) {
+                $deduplicated[] = $entry;
+            }
+        }
+        $history = $deduplicated;
 
         array_unshift($history, [
             'id' => $job['id'],

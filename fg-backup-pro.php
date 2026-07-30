@@ -3,7 +3,7 @@
  * Plugin Name: FG Backup Pro
  * Plugin URI: https://github.com/FUNCKGROUP/fg-backup-pro-wp
  * Description: Sichere WordPress-Backups mit asynchroner Verarbeitung, Prüfung, Rotation, SFTP, WebDAV und Dropbox.
- * Version: 2.1.0
+ * Version: 2.2.0
  * Author: FUNCKGROUP - Benedict von Funck
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -14,7 +14,7 @@
 
 defined('ABSPATH') || exit;
 
-define('FG_BACKUP_VERSION', '2.1.0');
+define('FG_BACKUP_VERSION', '2.2.0');
 define('FG_BACKUP_FILE', __FILE__);
 define('FG_BACKUP_DIR', plugin_dir_path(__FILE__));
 define('FG_BACKUP_URL', plugin_dir_url(__FILE__));
@@ -38,6 +38,7 @@ require_once FG_BACKUP_DIR . 'inc/class-fgbackup-storage.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-backup.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-cleanup.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-notifications.php';
+require_once FG_BACKUP_DIR . 'inc/class-fgbackup-health.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-async.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-cron.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-admin.php';
@@ -90,6 +91,7 @@ fg_backup_pro_register_with_core();
 FgBackup_Admin::init();
 FgBackup_Async::init();
 FgBackup_Cron::init();
+FgBackup_Health::init();
 
 add_action('plugins_loaded', ['FgBackup_Admin', 'maybe_upgrade'], 5);
 

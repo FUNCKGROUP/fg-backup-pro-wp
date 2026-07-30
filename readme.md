@@ -2,7 +2,7 @@
 
 FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen im geschützten FUNCKGROUP-Verzeichnis und überträgt sie optional zu mehreren Remote-Zielen. Die Verwaltung erfolgt als eigener Eintrag **FG Backup Pro** innerhalb von FG Core.
 
-## Version 2.1.0
+## Version 2.2.0
 
 - vollständige Backups als ZIP oder TGZ
 - Datenbank-Backups als SQL, SQL.GZ oder SQL.ZIP
@@ -21,6 +21,11 @@ FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen im geschützt
 - lokale Sicherung je Remote-Ziel wahlweise behalten oder nach vollständig erfolgreichen Uploads löschen
 - lokale Sicherung bleibt erhalten, sobald ein Remote-Ziel fehlschlägt
 - schließbare Admin-Notice nach dem Speichern von Einstellungen
+- Backup-Gesundheitsstatus für letzten Lauf, lokale Datei, Zeitplan, aktiven Prozess und alle aktivierten Remote-Ziele
+- manuelle und tägliche Remote-Prüfung auf Erreichbarkeit, Vorhandensein und Dateigröße
+- Warnung im WordPress-Admin und in der Adminleiste bei fehlgeschlagenen, überfälligen oder fehlenden Sicherungen
+- E-Mail-Modi „nur Fehler und Warnungen“ oder „jeder abgeschlossene Lauf“ mit frei wählbarem Empfänger
+- tägliche Gesundheitswarnungen mit Schutz vor wiederholten identischen E-Mails
 
 ## Voraussetzungen
 
@@ -60,6 +65,20 @@ composer.lock
 vendor/
 includes/fg-core/
 ```
+
+## Backup-Gesundheit
+
+Die Backup-Seite zeigt einen kompakten Gesundheitsstatus für:
+
+- letzten verwendbaren und letzten fehlgeschlagenen Lauf
+- vorhandene lokale Sicherung
+- aktiven oder möglicherweise festhängenden Prozess
+- aktivierten Zeitplan und nächsten WordPress-Cron-Lauf
+- SFTP, WebDAV und Dropbox
+
+Über **Jetzt prüfen** werden alle aktivierten Remote-Ziele live abgefragt. Dabei kontrolliert FG Backup Pro, ob das zuletzt erfolgreich hochgeladene Backup weiterhin vorhanden ist und ob die Remote-Dateigröße mit der erzeugten Sicherung übereinstimmt.
+
+Zusätzlich läuft einmal täglich eine automatische Prüfung. Kritische oder auffällige Zustände erscheinen im WordPress-Admin und optional per E-Mail. Identische Gesundheitswarnungen werden höchstens einmal innerhalb von 24 Stunden erneut versendet.
 
 ## Remote-Ziele
 
