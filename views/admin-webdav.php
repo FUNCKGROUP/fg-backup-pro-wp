@@ -15,14 +15,6 @@ $has_password = defined('FG_BACKUP_WEBDAV_PASSWORD') || get_option('fg_backup_we
     <?php settings_fields('fg_backup_webdav_settings'); ?>
     <table class="form-table" role="presentation">
         <tr>
-            <th scope="row"><?php esc_html_e('WebDAV', 'fg-backup-pro'); ?></th>
-            <td><label>
-                <input type="hidden" name="fg_backup_webdav_enabled" value="0">
-                <input type="checkbox" name="fg_backup_webdav_enabled" value="1" <?php checked((int) get_option('fg_backup_webdav_enabled', 0), 1); ?>>
-                <?php esc_html_e('Neue Backups zusätzlich per WebDAV hochladen', 'fg-backup-pro'); ?>
-            </label></td>
-        </tr>
-        <tr>
             <th scope="row"><label for="fg-backup-webdav-url"><?php esc_html_e('WebDAV-URL', 'fg-backup-pro'); ?></label></th>
             <td>
                 <input type="url" class="large-text code" name="fg_backup_webdav_base_url" id="fg-backup-webdav-url" value="<?php echo esc_attr($webdav_settings['base_url']); ?>" placeholder="https://cloud.example.com/remote.php/dav/files/benutzer">
@@ -59,14 +51,6 @@ $has_password = defined('FG_BACKUP_WEBDAV_PASSWORD') || get_option('fg_backup_we
         <tr>
             <th scope="row"><label for="fg-backup-webdav-retention"><?php esc_html_e('Remote-Aufbewahrung', 'fg-backup-pro'); ?></label></th>
             <td><input type="number" min="1" max="100" name="fg_backup_webdav_retention" id="fg-backup-webdav-retention" value="<?php echo esc_attr($webdav_settings['retention']); ?>" class="small-text"> <?php esc_html_e('Backups', 'fg-backup-pro'); ?></td>
-        </tr>
-        <tr>
-            <th scope="row"><?php esc_html_e('Lokale Datei', 'fg-backup-pro'); ?></th>
-            <td><label>
-                <input type="hidden" name="fg_backup_webdav_keep_local" value="0">
-                <input type="checkbox" name="fg_backup_webdav_keep_local" value="1" <?php checked($webdav_settings['keep_local']); ?>>
-                <?php esc_html_e('Nach erfolgreichen Remote-Uploads lokal behalten', 'fg-backup-pro'); ?>
-            </label></td>
         </tr>
         <tr>
             <th scope="row"><?php esc_html_e('Interne Server', 'fg-backup-pro'); ?></th>

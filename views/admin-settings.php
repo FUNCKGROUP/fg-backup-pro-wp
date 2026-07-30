@@ -128,6 +128,59 @@ $preview_filename = FgBackup_Backup::build_filename(
             </td>
         </tr>
         <tr>
+            <th scope="row"><?php esc_html_e('Remote-Ziele', 'fg-backup-pro'); ?></th>
+            <td>
+                <fieldset>
+                    <input type="hidden" name="fg_backup_sftp_enabled" value="0">
+                    <label>
+                        <input type="checkbox" name="fg_backup_sftp_enabled" value="1" <?php checked((int) get_option('fg_backup_sftp_enabled', 0), 1); ?> <?php disabled(!FgBackup_Sftp::available()); ?>>
+                        SFTP
+                    </label>
+                    <?php if (!FgBackup_Sftp::available()) : ?><span class="description"><?php esc_html_e('(nicht verfügbar)', 'fg-backup-pro'); ?></span><?php endif; ?>
+                    <br>
+
+                    <input type="hidden" name="fg_backup_webdav_enabled" value="0">
+                    <label>
+                        <input type="checkbox" name="fg_backup_webdav_enabled" value="1" <?php checked((int) get_option('fg_backup_webdav_enabled', 0), 1); ?> <?php disabled(!FgBackup_Webdav::available()); ?>>
+                        WebDAV
+                    </label>
+                    <?php if (!FgBackup_Webdav::available()) : ?><span class="description"><?php esc_html_e('(nicht verfügbar)', 'fg-backup-pro'); ?></span><?php endif; ?>
+                    <br>
+
+                    <input type="hidden" name="fg_backup_dropbox_enabled" value="0">
+                    <label>
+                        <input type="checkbox" name="fg_backup_dropbox_enabled" value="1" <?php checked((int) get_option('fg_backup_dropbox_enabled', 0), 1); ?> <?php disabled(!FgBackup_Dropbox::available() || !FgBackup_Dropbox::connected()); ?>>
+                        Dropbox
+                    </label>
+                    <?php if (!FgBackup_Dropbox::available()) : ?>
+                        <span class="description"><?php esc_html_e('(nicht verfügbar)', 'fg-backup-pro'); ?></span>
+                    <?php elseif (!FgBackup_Dropbox::connected()) : ?>
+                        <span class="description"><?php esc_html_e('(nicht verbunden)', 'fg-backup-pro'); ?></span>
+                    <?php endif; ?>
+                    <br>
+
+                    <input type="hidden" name="fg_backup_s3_enabled" value="0">
+                    <label>
+                        <input type="checkbox" name="fg_backup_s3_enabled" value="1" <?php checked((int) get_option('fg_backup_s3_enabled', 0), 1); ?> <?php disabled(!FgBackup_S3::available()); ?>>
+                        S3
+                    </label>
+                    <?php if (!FgBackup_S3::available()) : ?><span class="description"><?php esc_html_e('(nicht verfügbar)', 'fg-backup-pro'); ?></span><?php endif; ?>
+                </fieldset>
+                <p class="description"><?php esc_html_e('Verbindung, Zugangsdaten, Zielpfad und Remote-Aufbewahrung werden im jeweiligen Remote-Tab eingerichtet.', 'fg-backup-pro'); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row"><?php esc_html_e('Lokale Sicherung', 'fg-backup-pro'); ?></th>
+            <td>
+                <label>
+                    <input type="hidden" name="fg_backup_keep_local" value="0">
+                    <input type="checkbox" name="fg_backup_keep_local" value="1" <?php checked((int) get_option('fg_backup_keep_local', 1), 1); ?>>
+                    <?php esc_html_e('Backup nach erfolgreichen Remote-Uploads lokal behalten', 'fg-backup-pro'); ?>
+                </label>
+                <p class="description"><?php esc_html_e('Diese Einstellung gilt gemeinsam für SFTP, WebDAV, Dropbox und S3. Ist sie deaktiviert, wird die lokale Datei erst gelöscht, wenn alle aktivierten Remote-Uploads erfolgreich abgeschlossen wurden.', 'fg-backup-pro'); ?></p>
+            </td>
+        </tr>
+        <tr>
             <th scope="row"><label for="fg-backup-notification-mode"><?php esc_html_e('E-Mail-Benachrichtigungen', 'fg-backup-pro'); ?></label></th>
             <td>
                 <select name="fg_backup_notification_mode" id="fg-backup-notification-mode">

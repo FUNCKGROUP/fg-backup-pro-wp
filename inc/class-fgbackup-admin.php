@@ -28,6 +28,9 @@ class FgBackup_Admin {
         add_action('wp_ajax_fg_backup_dropbox_test', [__CLASS__, 'ajax_dropbox_test']);
         add_action('wp_ajax_fg_backup_dropbox_list', [__CLASS__, 'ajax_dropbox_list']);
         add_action('wp_ajax_fg_backup_dropbox_delete', [__CLASS__, 'ajax_dropbox_delete']);
+        add_action('wp_ajax_fg_backup_s3_test', [__CLASS__, 'ajax_s3_test']);
+        add_action('wp_ajax_fg_backup_s3_list', [__CLASS__, 'ajax_s3_list']);
+        add_action('wp_ajax_fg_backup_s3_delete', [__CLASS__, 'ajax_s3_delete']);
         add_action('rest_api_init', [__CLASS__, 'register_rest_routes']);
         add_action('admin_post_fg_backup_download', [__CLASS__, 'download']);
         add_action('admin_post_fg_backup_delete', [__CLASS__, 'delete']);
@@ -47,6 +50,7 @@ class FgBackup_Admin {
         if (get_option('fg_backup_version') !== FG_BACKUP_VERSION) {
             self::run_upgrade();
         } else {
+            self::migrate_remote_preferences();
             self::install_defaults();
             FgBackup_Health::schedule();
         }
@@ -54,6 +58,7 @@ class FgBackup_Admin {
 
     private static function run_upgrade() {
         self::migrate_notification_settings();
+        self::migrate_remote_preferences();
         self::install_defaults();
         FgBackup_Storage::ensure();
         FgBackup_Storage::migrate_legacy_backups();
@@ -74,6 +79,43 @@ class FgBackup_Admin {
         add_option('fg_backup_notification_mode', $legacy, '', false);
     }
 
+    private static function migrate_remote_preferences() {
+        if (get_option('fg_backup_keep_local', null) !== null) {
+            return;
+        }
+
+        $legacy_options = [
+            'fg_backup_sftp_keep_local',
+            'fg_backup_webdav_keep_local',
+            'fg_backup_dropbox_keep_local',
+            'fg_backup_s3_keep_local',
+        ];
+        $found = false;
+        $keep_local = 0;
+
+        foreach ($legacy_options as $option) {
+            $value = get_option($option, null);
+            if ($value === null) {
+                continue;
+            }
+            $found = true;
+            if (!empty($value)) {
+                $keep_local = 1;
+                break;
+            }
+        }
+
+        if (!$found) {
+            $keep_local = 1;
+        }
+
+        add_option('fg_backup_keep_local', $keep_local, '', false);
+
+        foreach ($legacy_options as $option) {
+            delete_option($option);
+        }
+    }
+
     private static function install_defaults() {
         $defaults = [
             'fg_backup_type' => 'full',
@@ -87,6 +129,7 @@ class FgBackup_Admin {
             'fg_backup_notification_mode' => 'off',
             'fg_backup_notification_email' => get_option('admin_email'),
             'fg_backup_exclusions' => '',
+            'fg_backup_keep_local' => 1,
             'fg_backup_sftp_enabled' => 0,
             'fg_backup_sftp_host' => '',
             'fg_backup_sftp_port' => 22,
@@ -97,7 +140,6 @@ class FgBackup_Admin {
             'fg_backup_sftp_key_passphrase' => '',
             'fg_backup_sftp_remote_dir' => '/backups/%host',
             'fg_backup_sftp_retention' => 10,
-            'fg_backup_sftp_keep_local' => 1,
             'fg_backup_sftp_host_key' => '',
             'fg_backup_sftp_host_key_target' => '',
             'fg_backup_webdav_enabled' => 0,
@@ -106,14 +148,25 @@ class FgBackup_Admin {
             'fg_backup_webdav_password' => '',
             'fg_backup_webdav_remote_dir' => '/backups/%host',
             'fg_backup_webdav_retention' => 10,
-            'fg_backup_webdav_keep_local' => 1,
             'fg_backup_webdav_allow_private' => 0,
             'fg_backup_dropbox_enabled' => 0,
             'fg_backup_dropbox_app_key' => '',
             'fg_backup_dropbox_relay_url' => 'https://lizenz.funckgroup-server.com/wp-json/fg-dropbox-relay/v1',
             'fg_backup_dropbox_remote_dir' => '/backups/%host',
             'fg_backup_dropbox_retention' => 10,
-            'fg_backup_dropbox_keep_local' => 1,
+            'fg_backup_s3_enabled' => 0,
+            'fg_backup_s3_provider' => 'custom',
+            'fg_backup_s3_endpoint' => '',
+            'fg_backup_s3_region_name' => 'us-east-1',
+            'fg_backup_s3_bucket_name' => '',
+            'fg_backup_s3_access_key' => '',
+            'fg_backup_s3_secret_key' => '',
+            'fg_backup_s3_session_token' => '',
+            'fg_backup_s3_path_style' => 1,
+            'fg_backup_s3_remote_dir' => '/backups/%host',
+            'fg_backup_s3_retention' => 10,
+            'fg_backup_s3_allow_private' => 0,
+            'fg_backup_s3_allow_http' => 0,
         ];
 
         foreach ($defaults as $name => $value) {
@@ -210,10 +263,20 @@ class FgBackup_Admin {
             'sanitize_callback' => 'sanitize_textarea_field',
             'default' => '',
         ]);
-
-
-        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_enabled', [
+        register_setting('fg_backup_settings', 'fg_backup_sftp_enabled', [
             'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_webdav_enabled', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_dropbox_enabled', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_s3_enabled', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_keep_local', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 1,
         ]);
         register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_host', [
             'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_sftp_host'], 'default' => '',
@@ -242,13 +305,6 @@ class FgBackup_Admin {
         register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_retention', [
             'type' => 'integer', 'sanitize_callback' => [__CLASS__, 'sanitize_sftp_retention'], 'default' => 10,
         ]);
-        register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_keep_local', [
-            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 1,
-        ]);
-
-        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_enabled', [
-            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
-        ]);
         register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_base_url', [
             'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_webdav_url'], 'default' => '',
         ]);
@@ -264,14 +320,7 @@ class FgBackup_Admin {
         register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_retention', [
             'type' => 'integer', 'sanitize_callback' => [__CLASS__, 'sanitize_remote_retention'], 'default' => 10,
         ]);
-        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_keep_local', [
-            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 1,
-        ]);
         register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_allow_private', [
-            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
-        ]);
-
-        register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_enabled', [
             'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
         ]);
         register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_app_key', [
@@ -286,8 +335,41 @@ class FgBackup_Admin {
         register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_retention', [
             'type' => 'integer', 'sanitize_callback' => [__CLASS__, 'sanitize_remote_retention'], 'default' => 10,
         ]);
-        register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_keep_local', [
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_provider', [
+            'type' => 'string', 'sanitize_callback' => ['FgBackup_S3', 'sanitize_provider'], 'default' => 'custom',
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_endpoint', [
+            'type' => 'string', 'sanitize_callback' => ['FgBackup_S3', 'sanitize_endpoint'], 'default' => '',
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_region_name', [
+            'type' => 'string', 'sanitize_callback' => ['FgBackup_S3', 'sanitize_region'], 'default' => 'us-east-1',
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_bucket_name', [
+            'type' => 'string', 'sanitize_callback' => ['FgBackup_S3', 'sanitize_bucket'], 'default' => '',
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_access_key', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_s3_access_key'], 'default' => '',
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_secret_key', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_s3_secret_key'], 'default' => '',
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_session_token', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_s3_session_token'], 'default' => '',
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_path_style', [
             'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 1,
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_remote_dir', [
+            'type' => 'string', 'sanitize_callback' => ['FgBackup_S3', 'sanitize_remote_dir'], 'default' => '/backups/%host',
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_retention', [
+            'type' => 'integer', 'sanitize_callback' => [__CLASS__, 'sanitize_remote_retention'], 'default' => 10,
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_allow_private', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+        register_setting('fg_backup_s3_settings', 'fg_backup_s3_allow_http', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
         ]);
     }
 
@@ -396,6 +478,19 @@ class FgBackup_Admin {
         return $value;
     }
 
+
+    public static function sanitize_s3_access_key($value) {
+        return self::sanitize_secret_option($value, 'fg_backup_s3_access_key', 'fg_backup_s3_settings');
+    }
+
+    public static function sanitize_s3_secret_key($value) {
+        return self::sanitize_secret_option($value, 'fg_backup_s3_secret_key', 'fg_backup_s3_settings');
+    }
+
+    public static function sanitize_s3_session_token($value) {
+        return self::sanitize_secret_option($value, 'fg_backup_s3_session_token', 'fg_backup_s3_settings');
+    }
+
     private static function sanitize_secret_option($value, $option, $settings_group) {
         $value = (string) $value;
         if ($value === '') {
@@ -492,6 +587,7 @@ class FgBackup_Admin {
             'sftpDeleteText' => __('Löschen', 'fg-backup-pro'),
             'webdavTestText' => __('WebDAV-Verbindung wird getestet …', 'fg-backup-pro'),
             'dropboxTestText' => __('Dropbox-Verbindung wird getestet …', 'fg-backup-pro'),
+            's3TestText' => __('S3-Verbindung wird getestet …', 'fg-backup-pro'),
             'remoteListLoadingText' => __('Remote-Dateien werden geladen …', 'fg-backup-pro'),
             'remoteListEmptyText' => __('Keine Remote-Backups gefunden.', 'fg-backup-pro'),
             'remoteDeleteConfirmText' => __('Remote-Backup wirklich löschen?', 'fg-backup-pro'),
@@ -637,6 +733,15 @@ class FgBackup_Admin {
         $dropbox_settings = FgBackup_Dropbox::settings();
         $dropbox_account = FgBackup_Dropbox::account();
         include FG_BACKUP_DIR . 'views/admin-dropbox.php';
+    }
+
+
+    public static function render_s3_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $s3_settings = FgBackup_S3::settings();
+        include FG_BACKUP_DIR . 'views/admin-s3.php';
     }
 
     public static function register_rest_routes() {
@@ -813,6 +918,46 @@ class FgBackup_Admin {
         $file = isset($_POST['file']) ? sanitize_text_field(wp_unslash($_POST['file'])) : '';
         try {
             FgBackup_Dropbox::delete_backup($file);
+            wp_send_json_success(['message' => __('Remote-Backup wurde gelöscht.', 'fg-backup-pro')]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+
+    public static function ajax_s3_test() {
+        self::assert_ajax_admin();
+        try {
+            $result = FgBackup_S3::test_connection();
+            wp_send_json_success([
+                'message' => sprintf(
+                    __('Verbindung erfolgreich. Bucket: %1$s · Ziel: %2$s', 'fg-backup-pro'),
+                    $result['bucket'],
+                    $result['directory']
+                ),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_s3_list() {
+        self::assert_ajax_admin();
+        try {
+            wp_send_json_success([
+                'files' => FgBackup_S3::list_backups(),
+                'directory' => 's3://' . FgBackup_S3::settings()['bucket'] . '/' . FgBackup_S3::resolved_remote_dir(),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_s3_delete() {
+        self::assert_ajax_admin();
+        $file = isset($_POST['file']) ? sanitize_text_field(wp_unslash($_POST['file'])) : '';
+        try {
+            FgBackup_S3::delete_backup($file);
             wp_send_json_success(['message' => __('Remote-Backup wurde gelöscht.', 'fg-backup-pro')]);
         } catch (Throwable $exception) {
             wp_send_json_error(['message' => $exception->getMessage()]);

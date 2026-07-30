@@ -14,15 +14,6 @@ $account_label = trim($dropbox_account['name'] . ($dropbox_account['email'] !== 
     <?php settings_fields('fg_backup_dropbox_settings'); ?>
     <table class="form-table" role="presentation">
         <tr>
-            <th scope="row"><?php esc_html_e('Dropbox', 'fg-backup-pro'); ?></th>
-            <td><label>
-                <input type="hidden" name="fg_backup_dropbox_enabled" value="0">
-                <input type="checkbox" name="fg_backup_dropbox_enabled" value="1" <?php checked((int) get_option('fg_backup_dropbox_enabled', 0), 1); ?> <?php disabled(!$connected); ?>>
-                <?php esc_html_e('Neue Backups zusätzlich zu Dropbox hochladen', 'fg-backup-pro'); ?>
-            </label>
-            <?php if (!$connected) : ?><p class="description"><?php esc_html_e('Dropbox kann erst nach erfolgreicher Verbindung aktiviert werden.', 'fg-backup-pro'); ?></p><?php endif; ?></td>
-        </tr>
-        <tr>
             <th scope="row"><label for="fg-backup-dropbox-app-key"><?php esc_html_e('App-Key', 'fg-backup-pro'); ?></label></th>
             <td>
                 <input type="text" class="regular-text code" name="fg_backup_dropbox_app_key" id="fg-backup-dropbox-app-key" value="<?php echo esc_attr($dropbox_settings['app_key']); ?>" autocomplete="off" <?php disabled($app_key_constant); ?>>
@@ -80,14 +71,6 @@ $account_label = trim($dropbox_account['name'] . ($dropbox_account['email'] !== 
         <tr>
             <th scope="row"><label for="fg-backup-dropbox-retention"><?php esc_html_e('Remote-Aufbewahrung', 'fg-backup-pro'); ?></label></th>
             <td><input type="number" min="1" max="100" name="fg_backup_dropbox_retention" id="fg-backup-dropbox-retention" value="<?php echo esc_attr($dropbox_settings['retention']); ?>" class="small-text"> <?php esc_html_e('Backups', 'fg-backup-pro'); ?></td>
-        </tr>
-        <tr>
-            <th scope="row"><?php esc_html_e('Lokale Datei', 'fg-backup-pro'); ?></th>
-            <td><label>
-                <input type="hidden" name="fg_backup_dropbox_keep_local" value="0">
-                <input type="checkbox" name="fg_backup_dropbox_keep_local" value="1" <?php checked($dropbox_settings['keep_local']); ?>>
-                <?php esc_html_e('Nach erfolgreichen Remote-Uploads lokal behalten', 'fg-backup-pro'); ?>
-            </label></td>
         </tr>
     </table>
     <?php submit_button(__('Dropbox-Einstellungen speichern', 'fg-backup-pro')); ?>

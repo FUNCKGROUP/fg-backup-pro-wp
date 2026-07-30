@@ -24,7 +24,6 @@ class FgBackup_Sftp {
             'auth' => get_option('fg_backup_sftp_auth', 'password') === 'key' ? 'key' : 'password',
             'remote_dir' => self::sanitize_remote_dir(get_option('fg_backup_sftp_remote_dir', '/backups/%host')),
             'retention' => max(1, min(100, (int) get_option('fg_backup_sftp_retention', 10))),
-            'keep_local' => (bool) get_option('fg_backup_sftp_keep_local', 1),
             'host_key' => (string) get_option('fg_backup_sftp_host_key', ''),
             'host_key_target' => (string) get_option('fg_backup_sftp_host_key_target', ''),
         ];

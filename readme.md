@@ -2,7 +2,7 @@
 
 FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen im geschützten FUNCKGROUP-Verzeichnis und überträgt sie optional zu mehreren Remote-Zielen. Die Verwaltung erfolgt als eigener Eintrag **FG Backup Pro** innerhalb von FG Core.
 
-## Version 2.2.0
+## Version 2.3.0
 
 - vollständige Backups als ZIP oder TGZ
 - Datenbank-Backups als SQL, SQL.GZ oder SQL.ZIP
@@ -17,8 +17,11 @@ FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen im geschützt
 - SFTP über phpseclib 3 mit Passwort oder SSH-Schlüssel
 - WebDAV für Nextcloud, QNAP, Hetzner Storage Box, NAS und andere kompatible Server
 - Dropbox über OAuth 2.0, PKCE und Refresh-Token
+- S3-kompatibler Object Storage über AWS Signature Version 4
+- praktisch getestet mit Amazon S3 und Backblaze B2
+- Multipart-Uploads für große S3-Backups ohne AWS-SDK-Abhängigkeit
 - Remote-Verbindungstest, Dateiliste, Löschen und Rotation
-- lokale Sicherung je Remote-Ziel wahlweise behalten oder nach vollständig erfolgreichen Uploads löschen
+- gemeinsame lokale Aufbewahrung zentral für alle Remote-Ziele festlegen
 - lokale Sicherung bleibt erhalten, sobald ein Remote-Ziel fehlschlägt
 - schließbare Admin-Notice nach dem Speichern von Einstellungen
 - Backup-Gesundheitsstatus für letzten Lauf, lokale Datei, Zeitplan, aktiven Prozess und alle aktivierten Remote-Ziele
@@ -26,6 +29,9 @@ FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen im geschützt
 - Warnung im WordPress-Admin und in der Adminleiste bei fehlgeschlagenen, überfälligen oder fehlenden Sicherungen
 - E-Mail-Modi „nur Fehler und Warnungen“ oder „jeder abgeschlossene Lauf“ mit frei wählbarem Empfänger
 - tägliche Gesundheitswarnungen mit Schutz vor wiederholten identischen E-Mails
+- Mehrfachauswahl und gemeinsames Löschen lokaler Backups
+- direkte Aktualisierung der Gesundheitsanzeige über „Jetzt prüfen“ ohne Seitenreload
+- robuste Erkennung der neuesten tatsächlich vorhandenen lokalen Sicherung
 
 ## Voraussetzungen
 
@@ -35,7 +41,8 @@ FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen im geschützt
 - `ZipArchive` für ZIP und SQL.ZIP
 - `PharData` und GZIP/Zlib für TGZ
 - GZIP/Zlib für SQL.GZ
-- PHP-cURL und PHP-DOM für WebDAV
+- PHP-cURL für WebDAV, Dropbox und S3
+- PHP-DOM für WebDAV und S3-XML-Antworten
 - WebDAV-Server mit Basic-Authentifizierung über HTTPS
 
 Eine installierbare Repository-Version enthält `vendor/`, `composer.lock` und den synchronisierten FG Core. Auf der WordPress-Zielseite ist kein Composer-Befehl erforderlich.
@@ -50,7 +57,7 @@ Backups unter `wp-content/.fg-private/fg-backup-pro/` bleiben beim Austausch des
 
 ## Composer und Entwicklung
 
-Composer liegt im Root des Plugins. Die Laufzeitabhängigkeit für SFTP ist `phpseclib/phpseclib`. WebDAV und Dropbox verwenden cURL beziehungsweise die WordPress HTTP API und benötigen keine zusätzliche PHP-Bibliothek. FG Core wird als Entwicklungsabhängigkeit bezogen und nach `includes/fg-core/` synchronisiert.
+Composer liegt im Root des Plugins. Die Laufzeitabhängigkeit für SFTP ist `phpseclib/phpseclib`. WebDAV, Dropbox und S3 verwenden cURL beziehungsweise die WordPress HTTP API und benötigen keine zusätzliche PHP-Bibliothek. Der S3-Adapter signiert die REST-Aufrufe direkt mit AWS Signature Version 4, damit PHP 7.4 unterstützt bleibt. FG Core wird als Entwicklungsabhängigkeit bezogen und nach `includes/fg-core/` synchronisiert.
 
 ```bash
 composer update
@@ -74,20 +81,23 @@ Die Backup-Seite zeigt einen kompakten Gesundheitsstatus für:
 - vorhandene lokale Sicherung
 - aktiven oder möglicherweise festhängenden Prozess
 - aktivierten Zeitplan und nächsten WordPress-Cron-Lauf
-- SFTP, WebDAV und Dropbox
+- SFTP, WebDAV, Dropbox und S3
 
 Über **Jetzt prüfen** werden alle aktivierten Remote-Ziele live abgefragt. Dabei kontrolliert FG Backup Pro, ob das zuletzt erfolgreich hochgeladene Backup weiterhin vorhanden ist und ob die Remote-Dateigröße mit der erzeugten Sicherung übereinstimmt.
 
 Zusätzlich läuft einmal täglich eine automatische Prüfung. Kritische oder auffällige Zustände erscheinen im WordPress-Admin und optional per E-Mail. Identische Gesundheitswarnungen werden höchstens einmal innerhalb von 24 Stunden erneut versendet.
+Auf der Backup-Seite kann die lokale Dateiliste per Checkbox gefiltert beziehungsweise gesammelt ausgewählt und sicher in einem Schritt gelöscht werden. Dateinamen mit mehreren Endungen wie `.db.sql.zip` werden dabei unverändert und pfadsicher verarbeitet.
 
 ## Remote-Ziele
 
-Mehrere Ziele können gleichzeitig aktiviert werden. FG Backup Pro erstellt und prüft das lokale Backup zuerst und arbeitet anschließend SFTP, WebDAV und Dropbox nacheinander ab.
+Mehrere Ziele können gleichzeitig aktiviert werden. FG Backup Pro erstellt und prüft das lokale Backup zuerst und arbeitet anschließend SFTP, WebDAV, Dropbox und S3 nacheinander ab.
+
+Die aktiven Remote-Ziele und die gemeinsame lokale Aufbewahrung werden zentral im Tab **Einstellungen** gewählt. Die einzelnen Remote-Tabs enthalten nur noch Verbindung, Zielpfad, Aufbewahrung und Dateiverwaltung.
 
 Eine lokale Datei wird nur gelöscht, wenn:
 
 1. alle aktivierten Remote-Ziele erfolgreich abgeschlossen wurden und
-2. bei allen aktivierten Zielen „lokal behalten“ deaktiviert ist.
+2. die gemeinsame Option „Backup nach erfolgreichen Remote-Uploads lokal behalten“ deaktiviert ist.
 
 Fehlschläge einzelner Remote-Ziele werden in der Laufhistorie getrennt angezeigt. Andere aktivierte Ziele werden trotzdem weiterverarbeitet.
 
@@ -174,9 +184,28 @@ Für die zentrale App:
 4. Die dort angezeigte Redirect-URI exakt in der Dropbox App Console eintragen.
 5. Den App-Key im Relay speichern oder über `FG_DROPBOX_RELAY_APP_KEY` bereitstellen.
 
+## S3-kompatibler Object Storage
+
+Der S3-Adapter unterstützt Amazon S3 sowie kompatible Anbieter wie Hetzner Object Storage, Cloudflare R2, Backblaze B2, Wasabi und MinIO. Konfiguriert werden Endpoint, Region, Bucket und Zugangsdaten. Path-Style und Virtual-Host-Style werden unterstützt.
+
+Kleine Backups werden atomar als einzelnes Objekt übertragen. Größere Dateien verwenden einen blockweisen Multipart-Upload. Ein abgebrochener Multipart-Upload wird bereinigt, fertige Objekte werden per HEAD auf ihre Dateigröße geprüft und anschließend rotiert. Dateiliste und Löschen funktionieren direkt im WordPress-Admin.
+
+Standardmäßig sind HTTPS und öffentliche Endpoints erforderlich. Private IP-Adressen und HTTP können für ein internes MinIO oder NAS bewusst freigeschaltet werden.
+
+Optionale Konstanten:
+
+```php
+define('FG_BACKUP_S3_ACCESS_KEY', '...');
+define('FG_BACKUP_S3_SECRET_KEY', '...');
+define('FG_BACKUP_S3_SESSION_TOKEN', '...'); // nur bei temporären Zugangsdaten
+define('FG_BACKUP_S3_PART_SIZE', 8 * 1024 * 1024);
+```
+
+Die Zugangsdaten werden verschlüsselt gespeichert und aus Datenbank-Backups entfernt. Der verwendete API-Benutzer benötigt mindestens Berechtigungen zum Auflisten des Buckets sowie zum Lesen, Schreiben, Löschen und für Multipart-Uploads im gewählten Prefix.
+
 ## Zielverzeichnisse
 
-SFTP, WebDAV und Dropbox unterstützen:
+SFTP, WebDAV, Dropbox und S3 unterstützen:
 
 ```text
 %host   Domain der WordPress-Installation

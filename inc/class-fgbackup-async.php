@@ -724,13 +724,9 @@ class FgBackup_Async {
     private static function finish_remote_sequence(array &$job) {
         $queue = isset($job['remote_queue']) && is_array($job['remote_queue']) ? $job['remote_queue'] : [];
         $errors = isset($job['remote_errors']) && is_array($job['remote_errors']) ? $job['remote_errors'] : [];
-        $delete_local = !empty($queue) && empty($errors);
-        foreach ($queue as $target) {
-            if (FgBackup_Remotes::keep_local($target)) {
-                $delete_local = false;
-                break;
-            }
-        }
+        $delete_local = !empty($queue)
+            && empty($errors)
+            && !FgBackup_Remotes::keep_local();
 
         if ($delete_local && !empty($job['final_path']) && is_file($job['final_path'])) {
             if (!@unlink($job['final_path'])) {

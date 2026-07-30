@@ -18,6 +18,10 @@ class FgBackup_Remotes {
                 'label' => 'Dropbox',
                 'class' => 'FgBackup_Dropbox',
             ],
+            's3' => [
+                'label' => 'S3',
+                'class' => 'FgBackup_S3',
+            ],
         ];
     }
 
@@ -54,13 +58,8 @@ class FgBackup_Remotes {
         }
     }
 
-    public static function keep_local($id) {
-        $class = self::class_name($id);
-        if (!is_callable([$class, 'settings'])) {
-            return true;
-        }
-        $settings = $class::settings();
-        return !empty($settings['keep_local']);
+    public static function keep_local() {
+        return (bool) get_option('fg_backup_keep_local', 1);
     }
 
     public static function prepare($id, $local_path, $file_name) {

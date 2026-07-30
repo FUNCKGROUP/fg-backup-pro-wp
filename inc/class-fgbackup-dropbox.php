@@ -25,7 +25,6 @@ class FgBackup_Dropbox {
             'relay_url' => self::relay_base_url(),
             'remote_dir' => self::sanitize_remote_dir(get_option('fg_backup_dropbox_remote_dir', '/backups/%host')),
             'retention' => max(1, min(100, (int) get_option('fg_backup_dropbox_retention', 10))),
-            'keep_local' => (bool) get_option('fg_backup_dropbox_keep_local', 1),
         ];
     }
 

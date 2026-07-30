@@ -22,16 +22,6 @@ $host_key_target = (string) get_option('fg_backup_sftp_host_key_target', '');
 
     <table class="form-table" role="presentation">
         <tr>
-            <th scope="row"><?php esc_html_e('SFTP', 'fg-backup-pro'); ?></th>
-            <td>
-                <label>
-                    <input type="hidden" name="fg_backup_sftp_enabled" value="0">
-                    <input type="checkbox" name="fg_backup_sftp_enabled" value="1" <?php checked((int) get_option('fg_backup_sftp_enabled', 0), 1); ?>>
-                    <?php esc_html_e('Neue Backups zusätzlich per SFTP hochladen', 'fg-backup-pro'); ?>
-                </label>
-            </td>
-        </tr>
-        <tr>
             <th scope="row"><label for="fg-backup-sftp-host"><?php esc_html_e('Server', 'fg-backup-pro'); ?></label></th>
             <td>
                 <input type="text" class="regular-text code" name="fg_backup_sftp_host" id="fg-backup-sftp-host" value="<?php echo esc_attr($sftp_settings['host']); ?>" placeholder="backup.example.com" autocomplete="off">
@@ -111,16 +101,6 @@ $host_key_target = (string) get_option('fg_backup_sftp_host_key_target', '');
             <td>
                 <input type="number" min="1" max="100" name="fg_backup_sftp_retention" id="fg-backup-sftp-retention" value="<?php echo esc_attr($sftp_settings['retention']); ?>" class="small-text">
                 <span><?php esc_html_e('Backups', 'fg-backup-pro'); ?></span>
-            </td>
-        </tr>
-        <tr>
-            <th scope="row"><?php esc_html_e('Lokale Datei', 'fg-backup-pro'); ?></th>
-            <td>
-                <label>
-                    <input type="hidden" name="fg_backup_sftp_keep_local" value="0">
-                    <input type="checkbox" name="fg_backup_sftp_keep_local" value="1" <?php checked($sftp_settings['keep_local']); ?>>
-                    <?php esc_html_e('Nach erfolgreichen Remote-Uploads lokal behalten', 'fg-backup-pro'); ?>
-                </label>
             </td>
         </tr>
         <tr>

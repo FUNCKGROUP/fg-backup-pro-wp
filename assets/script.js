@@ -28,6 +28,7 @@
         var $sftpTableBody = $sftpTable.find('tbody');
         var $webdavResult = $('#fg-backup-webdav-result');
         var $dropboxResult = $('#fg-backup-dropbox-result');
+        var $s3Result = $('#fg-backup-s3-result');
         var dropboxStatusTimer = null;
         var $healthButton = $('#fg-backup-health-check');
         var $healthResult = $('#fg-backup-health-result');
@@ -626,6 +627,27 @@
                 $webdavResult.addClass('is-success').text(response.data.message || 'Verbindung erfolgreich.');
             }).fail(function () {
                 $webdavResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $test.prop('disabled', false);
+            });
+        });
+
+
+        $('#fg-backup-s3-test').on('click', function () {
+            var $test = $(this);
+            $test.prop('disabled', true);
+            $s3Result.removeClass('is-error is-success').text(fgBackupPro.s3TestText || 'S3-Verbindung wird getestet …');
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_s3_test',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $s3Result.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                $s3Result.addClass('is-success').text(response.data.message || 'Verbindung erfolgreich.');
+            }).fail(function () {
+                $s3Result.addClass('is-error').text(fgBackupPro.failedText);
             }).always(function () {
                 $test.prop('disabled', false);
             });

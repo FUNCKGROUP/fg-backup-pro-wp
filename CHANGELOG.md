@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.3.0 – 30.07.2026
+
+- neues Remote-Ziel für Amazon S3 und S3-kompatiblen Object Storage
+- direkte AWS-Signature-Version-4-Signierung ohne zusätzliches AWS SDK
+- weiterhin kompatibel mit PHP 7.4
+- Anbieterzuordnung für Amazon S3, Hetzner Object Storage, Cloudflare R2, Backblaze B2, Wasabi, MinIO und benutzerdefinierte S3-Endpunkte
+- Unterstützung für Path-Style und Virtual-Host-Style
+- verschlüsselte Speicherung von Access Key, Secret Key und optionalem Session Token
+- alternative Bereitstellung der S3-Zugangsdaten über Konstanten
+- Verbindungstest mit Schreiben, Größenprüfung, Rücklesen, Bucket-Liste und Löschen einer temporären Datei
+- atomare Einzeluploads für kleine Backups
+- blockweise Multipart-Uploads für große Backups mit mindestens 5 MiB großen Teilen
+- kontrollierter Abbruch und Bereinigung unvollständiger Multipart-Uploads
+- Prüfung der fertigen Remote-Dateigröße
+- automatische S3-Rotation, Remote-Dateiliste und geschütztes Löschen
+- HTTPS- und SSRF-Schutz mit bewusster Freigabe privater beziehungsweise unverschlüsselter interner Endpoints
+- S3 in Backup-Gesundheitsprüfung, Laufhistorie, Benachrichtigungen und generischer Remote-Pipeline integriert
+- S3-Zugangsdaten werden aus SQL-Backups entfernt
+- Aktivierung aller Remote-Ziele und gemeinsame lokale Aufbewahrung zentral in den Einstellungen zusammengeführt
+- erfolgreich getestet mit Amazon S3 und Backblaze B2 einschließlich Upload, Dateiliste und Löschen
+
 ## 2.2.0 – 30.07.2026
 
 - zentrale Backup-Gesundheitsanzeige auf der Backup-Seite
@@ -16,6 +37,12 @@
 - frei wählbarer E-Mail-Empfänger
 - Schutz vor wiederholten identischen Gesundheitswarnungen innerhalb von 24 Stunden
 - bestehende Benachrichtigungseinstellung wird beim Update automatisch übernommen
+- erfolgreiche Backups bleiben auch bei Fehlern in Gesundheitsprüfung oder E-Mail-Nachbearbeitung abgeschlossen
+- Gesundheitsstatus verwendet die neueste tatsächlich vorhandene lokale Sicherung
+- manuelle Gesundheitsprüfung aktualisiert die Anzeige direkt und dauerhaft
+- doppelte Gesundheitswarnung auf der FG-Backup-Pro-Seite entfernt
+- Checkboxen, Gesamtauswahl und gemeinsames Löschen mehrerer lokaler Backups
+- sichere unveränderte Verarbeitung von Dateinamen mit Mehrfachendungen wie `.db.sql.zip` beim Download und Löschen
 
 ## 2.1.0 – 30.07.2026
 

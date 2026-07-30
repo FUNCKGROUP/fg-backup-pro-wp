@@ -19,7 +19,6 @@ class FgBackup_Webdav {
             'username' => trim((string) get_option('fg_backup_webdav_username', '')),
             'remote_dir' => self::sanitize_remote_dir(get_option('fg_backup_webdav_remote_dir', '/backups/%host')),
             'retention' => max(1, min(100, (int) get_option('fg_backup_webdav_retention', 10))),
-            'keep_local' => (bool) get_option('fg_backup_webdav_keep_local', 1),
             'allow_private' => (bool) get_option('fg_backup_webdav_allow_private', 0),
         ];
     }
