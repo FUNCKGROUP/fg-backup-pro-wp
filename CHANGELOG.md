@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.1.0 – 30.07.2026
+
+- generische Remote-Pipeline für mehrere gleichzeitig aktivierte Speicherziele
+- getrennte Erfolgs- und Fehlerergebnisse pro Remote-Ziel
+- lokale Datei wird nur nach vollständig erfolgreichen Uploads zu allen aktivierten Zielen gelöscht
+- WebDAV mit HTTPS, Verbindungstest, automatischer Verzeichnisanlage und SSRF-Schutz
+- kanonische WebDAV-Verzeichnis-URLs mit abschließendem Slash für Apache- und Storage-Box-Server
+- direkte Basic-Authentifizierung bei gestreamten WebDAV-Uploads ohne fehleranfälliges Zurückspulen
+- WebDAV-Upload über temporäre `.part`-Datei, Größenprüfung und finales `MOVE`
+- WebDAV-Rotation, Remote-Dateiliste und geschütztes Löschen
+- bewusste Freigabe privater IP-Adressen für internes NAS oder Nextcloud
+- Dropbox OAuth 2.0 mit PKCE und automatisch erneuerten Refresh-Tokens
+- zentrale Relay-Verbindung ohne Übertragung von PKCE-Verifier, Tokens oder Backup-Dateien
+- alternative manuelle Dropbox-Verbindung ohne FUNCKGROUP-Relay
+- Dropbox App-Folder-Unterstützung, automatische Zielordneranlage, Upload Sessions und blockweiser Upload
+- Dropbox-Rotation, Remote-Dateiliste, Löschen und Verbindungstest
+- schließbare WordPress-Admin-Notice nach dem Speichern aller Einstellungsbereiche
+- Status „Abgeschlossen mit Fehlern“ bei erfolgreichem lokalen Backup und einzelnen Remote-Fehlern
+- generische Remote-Ergebnisse in Laufhistorie, Benachrichtigungen und Adminleiste
+- separates Plugin `FG Dropbox Relay` für den zentralen Callback-Server
+- Remote-Passwörter und Dropbox-Tokens werden in SQL-Backups aus Sicherheitsgründen geleert
+
 ## 2.0.0 – 29.07.2026
 
 - SFTP über phpseclib 3 mit PHP-7.4-Kompatibilität

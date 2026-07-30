@@ -9,7 +9,7 @@ $host_key = (string) get_option('fg_backup_sftp_host_key', '');
 $host_key_target = (string) get_option('fg_backup_sftp_host_key_target', '');
 ?>
 
-<?php settings_errors('fg_backup_sftp_settings'); ?>
+<?php FgBackup_Admin::render_settings_notices('fg_backup_sftp_settings'); ?>
 
 <?php if (!FgBackup_Sftp::available()) : ?>
     <div class="notice notice-error inline"><p>
@@ -119,7 +119,7 @@ $host_key_target = (string) get_option('fg_backup_sftp_host_key_target', '');
                 <label>
                     <input type="hidden" name="fg_backup_sftp_keep_local" value="0">
                     <input type="checkbox" name="fg_backup_sftp_keep_local" value="1" <?php checked($sftp_settings['keep_local']); ?>>
-                    <?php esc_html_e('Nach erfolgreichem SFTP-Upload lokal behalten', 'fg-backup-pro'); ?>
+                    <?php esc_html_e('Nach erfolgreichen Remote-Uploads lokal behalten', 'fg-backup-pro'); ?>
                 </label>
             </td>
         </tr>

@@ -26,6 +26,9 @@
         var $sftpListResult = $('#fg-backup-sftp-list-result');
         var $sftpTable = $('#fg-backup-sftp-table');
         var $sftpTableBody = $sftpTable.find('tbody');
+        var $webdavResult = $('#fg-backup-webdav-result');
+        var $dropboxResult = $('#fg-backup-dropbox-result');
+        var dropboxStatusTimer = null;
 
         function trimFilename(value) {
             return value.replace(/^[ ._-]+|[ ._-]+$/g, '');
@@ -200,6 +203,86 @@
             });
         }
 
+        function remoteAction(target, suffix) {
+            return 'fg_backup_' + target + '_' + suffix;
+        }
+
+        function renderRemoteFiles($section, target, files) {
+            var $table = $section.find('.fg-backup-remote-table');
+            var $body = $table.find('tbody');
+            var $result = $section.find('.fg-backup-remote-list-result');
+            $body.empty();
+            if (!files || !files.length) {
+                $table.attr('hidden', 'hidden');
+                $result.removeClass('is-error is-success').text(fgBackupPro.remoteListEmptyText || 'Keine Remote-Backups gefunden.');
+                return;
+            }
+            files.forEach(function (file) {
+                var $delete = $('<button>', {
+                    type: 'button',
+                    class: 'button-link-delete fg-backup-remote-delete',
+                    text: fgBackupPro.remoteDeleteText || 'Löschen'
+                }).attr({'data-target': target, 'data-file': file.name || ''});
+                $('<tr>').append(
+                    $('<td>').append($('<strong>').text(file.name || '')),
+                    $('<td>').text(file.size || ''),
+                    $('<td>').text(file.date || ''),
+                    $('<td>').append($delete)
+                ).appendTo($body);
+            });
+            $table.removeAttr('hidden');
+        }
+
+        function loadRemoteFiles(target, $section) {
+            var $button = $section.find('.fg-backup-remote-list');
+            var $result = $section.find('.fg-backup-remote-list-result');
+            var $table = $section.find('.fg-backup-remote-table');
+            $button.prop('disabled', true);
+            $result.removeClass('is-error is-success').text(fgBackupPro.remoteListLoadingText || 'Remote-Dateien werden geladen …');
+            $.post(fgBackupPro.ajaxUrl, {
+                action: remoteAction(target, 'list'),
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $table.attr('hidden', 'hidden');
+                    $result.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                renderRemoteFiles($section, target, response.data.files || []);
+                if (response.data.files && response.data.files.length) {
+                    $result.addClass('is-success').text(response.data.directory || '');
+                }
+            }).fail(function () {
+                $result.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $button.prop('disabled', false);
+            });
+        }
+
+        function pollDropboxConnection() {
+            window.clearTimeout(dropboxStatusTimer);
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_dropbox_oauth_status',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    return;
+                }
+                if (response.data.connected) {
+                    $dropboxResult.removeClass('is-error').addClass('is-success').text('Dropbox wurde verbunden.');
+                    window.setTimeout(function () { window.location.reload(); }, 800);
+                    return;
+                }
+                if (response.data.error) {
+                    $dropboxResult.addClass('is-error').text(response.data.error);
+                    return;
+                }
+                if (response.data.pending) {
+                    dropboxStatusTimer = window.setTimeout(pollDropboxConnection, 2000);
+                }
+            });
+        }
+
         function closeFilenamePopover() {
             if (!$filenamePopover.length) {
                 return;
@@ -265,6 +348,8 @@
                 label = 'FG Backup Pro: Startet …';
             } else if (status === 'completed') {
                 label = 'FG Backup Pro: Abgeschlossen';
+            } else if (status === 'completed_with_errors') {
+                label = 'FG Backup Pro: Mit Fehlern';
             } else if (status === 'canceled') {
                 label = 'FG Backup Pro: Abgebrochen';
             } else if (status === 'failed') {
@@ -275,7 +360,7 @@
 
             $item.find('> .ab-item').text(label).attr('title', job && job.stage ? job.stage : 'Backup läuft');
 
-            if (status === 'completed' || status === 'canceled' || status === 'failed') {
+            if (status === 'completed' || status === 'completed_with_errors' || status === 'canceled' || status === 'failed') {
                 window.setTimeout(function () {
                     $item.remove();
                 }, 5000);
@@ -313,10 +398,10 @@
                 showStatus(job.stage, job.detail, job.progress);
                 updateAdminBar(job);
 
-                if (job.status === 'completed') {
-                    var detail = job.file || job.remote_path || '';
+                if (job.status === 'completed' || job.status === 'completed_with_errors') {
+                    var detail = job.remote_summary || job.file || job.remote_path || '';
                     if (job.local_deleted) {
-                        detail = (job.remote_path ? 'SFTP: ' + job.remote_path + ' · ' : '') + (fgBackupPro.localDeletedText || 'Lokal gelöscht.');
+                        detail += (detail ? ' · ' : '') + (fgBackupPro.localDeletedText || 'Lokal gelöscht.');
                     } else if (job.size) {
                         detail += (detail ? ' · ' : '') + job.size;
                     }
@@ -515,6 +600,195 @@
             }).fail(function () {
                 $sftpListResult.addClass('is-error').text(fgBackupPro.failedText);
                 $delete.prop('disabled', false);
+            });
+        });
+
+        $('#fg-backup-webdav-test').on('click', function () {
+            var $test = $(this);
+            $test.prop('disabled', true);
+            $webdavResult.removeClass('is-error is-success').text(fgBackupPro.webdavTestText || 'WebDAV-Verbindung wird getestet …');
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_webdav_test',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $webdavResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                $webdavResult.addClass('is-success').text(response.data.message || 'Verbindung erfolgreich.');
+            }).fail(function () {
+                $webdavResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $test.prop('disabled', false);
+            });
+        });
+
+        $('.fg-backup-remote-list').on('click', function () {
+            var $section = $(this).closest('.fg-backup-remote-section');
+            var target = String($(this).attr('data-target') || $section.attr('data-remote') || '');
+            if (target) {
+                loadRemoteFiles(target, $section);
+            }
+        });
+
+        $(document).on('click', '.fg-backup-remote-delete', function () {
+            var $delete = $(this);
+            var target = String($delete.attr('data-target') || '');
+            var file = String($delete.attr('data-file') || '');
+            var $section = $delete.closest('.fg-backup-remote-section');
+            var $result = $section.find('.fg-backup-remote-list-result');
+            if (!target || !file || !window.confirm(fgBackupPro.remoteDeleteConfirmText || 'Remote-Backup wirklich löschen?')) {
+                return;
+            }
+            $delete.prop('disabled', true);
+            $.post(fgBackupPro.ajaxUrl, {
+                action: remoteAction(target, 'delete'),
+                security: fgBackupPro.nonce,
+                file: file
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $result.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    $delete.prop('disabled', false);
+                    return;
+                }
+                $result.removeClass('is-error').addClass('is-success').text(response.data.message || '');
+                loadRemoteFiles(target, $section);
+            }).fail(function () {
+                $result.addClass('is-error').text(fgBackupPro.failedText);
+                $delete.prop('disabled', false);
+            });
+        });
+
+        $('#fg-backup-dropbox-connect').on('click', function () {
+            var $connect = $(this);
+            var popup = window.open('', 'fgBackupDropbox', 'width=720,height=760,resizable=yes,scrollbars=yes');
+            var $fallback = $('#fg-backup-dropbox-relay-link').attr('hidden', 'hidden');
+            $connect.prop('disabled', true);
+            $dropboxResult.removeClass('is-error is-success').text(fgBackupPro.dropboxConnectingText || 'Dropbox-Verbindung wird vorbereitet …');
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_dropbox_begin_relay',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    if (popup && !popup.closed) {
+                        popup.close();
+                    }
+                    $dropboxResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                if (popup && !popup.closed) {
+                    popup.location.href = response.data.authorization_url;
+                } else {
+                    $fallback.attr('href', response.data.authorization_url).removeAttr('hidden');
+                }
+                $dropboxResult.text(fgBackupPro.dropboxWaitingText || 'Warte auf die Dropbox-Freigabe …');
+                pollDropboxConnection();
+            }).fail(function () {
+                if (popup && !popup.closed) {
+                    popup.close();
+                }
+                $dropboxResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $connect.prop('disabled', false);
+            });
+        });
+
+        $('#fg-backup-dropbox-manual-start').on('click', function () {
+            var $manual = $(this);
+            var popup = window.open('', 'fgBackupDropboxManual', 'width=720,height=760,resizable=yes,scrollbars=yes');
+            $manual.prop('disabled', true);
+            $dropboxResult.removeClass('is-error is-success').text(fgBackupPro.dropboxConnectingText || 'Dropbox-Verbindung wird vorbereitet …');
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_dropbox_begin_manual',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    if (popup && !popup.closed) {
+                        popup.close();
+                    }
+                    $dropboxResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                $('#fg-backup-dropbox-manual-link').attr('href', response.data.authorization_url);
+                $('#fg-backup-dropbox-manual').removeAttr('hidden');
+                if (popup && !popup.closed) {
+                    popup.location.href = response.data.authorization_url;
+                }
+                $dropboxResult.text('Code nach der Freigabe hier einfügen.');
+            }).fail(function () {
+                if (popup && !popup.closed) {
+                    popup.close();
+                }
+                $dropboxResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $manual.prop('disabled', false);
+            });
+        });
+
+        $('#fg-backup-dropbox-code-submit').on('click', function () {
+            var $submit = $(this);
+            var code = String($('#fg-backup-dropbox-code').val() || '').trim();
+            if (!code) {
+                $dropboxResult.addClass('is-error').text('Der Autorisierungscode fehlt.');
+                return;
+            }
+            $submit.prop('disabled', true);
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_dropbox_complete_manual',
+                security: fgBackupPro.nonce,
+                code: code
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $dropboxResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                $dropboxResult.removeClass('is-error').addClass('is-success').text(response.data.message || 'Dropbox wurde verbunden.');
+                window.setTimeout(function () { window.location.reload(); }, 800);
+            }).fail(function () {
+                $dropboxResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $submit.prop('disabled', false);
+            });
+        });
+
+        $('#fg-backup-dropbox-test').on('click', function () {
+            var $test = $(this);
+            $test.prop('disabled', true);
+            $dropboxResult.removeClass('is-error is-success').text(fgBackupPro.dropboxTestText || 'Dropbox-Verbindung wird getestet …');
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_dropbox_test',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $dropboxResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                $dropboxResult.addClass('is-success').text(response.data.message || 'Verbindung erfolgreich.');
+            }).fail(function () {
+                $dropboxResult.addClass('is-error').text(fgBackupPro.failedText);
+            }).always(function () {
+                $test.prop('disabled', false);
+            });
+        });
+
+        $('#fg-backup-dropbox-disconnect').on('click', function () {
+            if (!window.confirm(fgBackupPro.dropboxDisconnectConfirmText || 'Dropbox-Verbindung wirklich trennen?')) {
+                return;
+            }
+            var $disconnect = $(this);
+            $disconnect.prop('disabled', true);
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_dropbox_disconnect',
+                security: fgBackupPro.nonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $dropboxResult.addClass('is-error').text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    return;
+                }
+                $dropboxResult.removeClass('is-error').addClass('is-success').text(response.data.message || '');
+                window.setTimeout(function () { window.location.reload(); }, 800);
+            }).always(function () {
+                $disconnect.prop('disabled', false);
             });
         });
 

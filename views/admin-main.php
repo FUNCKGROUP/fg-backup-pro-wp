@@ -125,6 +125,8 @@
                     <?php
                     if ($entry['status'] === 'completed') {
                         esc_html_e('Abgeschlossen', 'fg-backup-pro');
+                    } elseif ($entry['status'] === 'completed_with_errors') {
+                        esc_html_e('Mit Fehlern', 'fg-backup-pro');
                     } elseif ($entry['status'] === 'canceled') {
                         esc_html_e('Abgebrochen', 'fg-backup-pro');
                     } else {
@@ -138,14 +140,19 @@
                 <td><?php echo esc_html(human_time_diff((int) $entry['started_at'], (int) $entry['finished_at'])); ?></td>
                 <td>
                     <?php
+                    $remote_results = !empty($entry['remote_results']) && is_array($entry['remote_results'])
+                        ? $entry['remote_results']
+                        : [];
+                    $remote_summary = FgBackup_Remotes::summarize($remote_results);
+
                     if ($entry['status'] === 'canceled') {
                         if (!empty($entry['file'])) {
-                            echo esc_html(sprintf(__('SFTP-Upload abgebrochen; lokale Datei vorhanden: %s', 'fg-backup-pro'), $entry['file']));
+                            echo esc_html(sprintf(__('Remote-Upload abgebrochen; lokale Datei vorhanden: %s', 'fg-backup-pro'), $entry['file']));
                         } else {
                             esc_html_e('Vom Benutzer abgebrochen', 'fg-backup-pro');
                         }
-                    } elseif (!empty($entry['error'])) {
-                        echo esc_html($entry['error']);
+                    } elseif ($entry['status'] === 'failed') {
+                        echo esc_html(!empty($entry['error']) ? $entry['error'] : __('Backup fehlgeschlagen.', 'fg-backup-pro'));
                         if (!empty($entry['file'])) {
                             echo '<span class="fg-backup-note">' . esc_html(sprintf(__('Lokale Datei vorhanden: %s', 'fg-backup-pro'), $entry['file'])) . '</span>';
                         }
@@ -153,10 +160,17 @@
                         if (!empty($entry['file'])) {
                             echo esc_html($entry['file']);
                         } elseif (!empty($entry['local_deleted'])) {
-                            esc_html_e('Lokal nach SFTP-Upload gelöscht', 'fg-backup-pro');
+                            esc_html_e('Lokale Datei nach erfolgreichen Remote-Uploads gelöscht', 'fg-backup-pro');
                         }
-                        if (!empty($entry['remote_path'])) {
-                            echo '<span class="fg-backup-note">' . esc_html(sprintf(__('SFTP: %s', 'fg-backup-pro'), $entry['remote_path'])) . '</span>';
+                        if ($remote_summary !== '') {
+                            echo '<span class="fg-backup-note">' . esc_html($remote_summary) . '</span>';
+                        }
+                        if (!empty($entry['remote_errors']) && is_array($entry['remote_errors'])) {
+                            foreach ($entry['remote_errors'] as $target => $message) {
+                                if ($target === 'local') {
+                                    echo '<span class="fg-backup-note fg-backup-note-error">' . esc_html($message) . '</span>';
+                                }
+                            }
                         }
                     }
                     if (!empty($entry['note'])) {

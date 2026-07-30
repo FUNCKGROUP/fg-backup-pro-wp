@@ -34,6 +34,7 @@ class FgBackup_Async {
             return new WP_Error('fg_backup_running', __('Es läuft bereits ein Backup.', 'fg-backup-pro'));
         }
 
+        $remote_queue = FgBackup_Remotes::enabled_ids();
         $job_id = 'backup_' . str_replace('-', '', wp_generate_uuid4());
         $job = [
             'id' => $job_id,
@@ -57,7 +58,13 @@ class FgBackup_Async {
             'available_space' => 0,
             'local_verified' => false,
             'local_deleted' => false,
-            'remote_status' => FgBackup_Sftp::enabled() ? 'queued' : 'disabled',
+            'remote_status' => $remote_queue ? 'queued' : 'disabled',
+            'remote_queue' => $remote_queue,
+            'remote_index' => 0,
+            'remote_current' => '',
+            'remote_state' => [],
+            'remote_results' => [],
+            'remote_errors' => [],
             'remote_path' => '',
             'remote_temp' => '',
             'remote_offset' => 0,
@@ -90,7 +97,7 @@ class FgBackup_Async {
 
         try {
             $job = self::get_status_raw($job_id);
-            if (!is_array($job) || in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
+            if (!is_array($job) || in_array($job['status'], ['completed', 'completed_with_errors', 'failed', 'canceled'], true)) {
                 return;
             }
 
@@ -102,8 +109,8 @@ class FgBackup_Async {
             if (function_exists('set_time_limit')) {
                 if (!empty($job['format']) && $job['format'] === 'tgz' && $job['step'] === 'files_archive') {
                     $time_limit = 300;
-                } elseif (in_array($job['step'], ['sftp_prepare', 'sftp_upload', 'sftp_finalize'], true)) {
-                    $time_limit = 60;
+                } elseif (in_array($job['step'], ['sftp_prepare', 'sftp_upload', 'sftp_finalize', 'remote_prepare', 'remote_upload', 'remote_finalize'], true)) {
+                    $time_limit = 3600;
                 } else {
                     $time_limit = 20;
                 }
@@ -149,15 +156,12 @@ class FgBackup_Async {
                         break;
 
                     case 'sftp_prepare':
-                        self::prepare_sftp_upload($job);
-                        break;
-
                     case 'sftp_upload':
-                        self::process_sftp_upload($job);
-                        break;
-
                     case 'sftp_finalize':
-                        self::finalize_sftp_upload($job);
+                    case 'remote_prepare':
+                    case 'remote_upload':
+                    case 'remote_finalize':
+                        self::process_remote_step($job);
                         if ($job['step'] === 'cleanup' && (microtime(true) - $process_started) < 12) {
                             self::complete_job($job);
                         }
@@ -180,7 +184,7 @@ class FgBackup_Async {
                 $job['updated_at'] = time();
                 update_option(self::option_name($job_id), $job, false);
 
-                if (!in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
+                if (!in_array($job['status'], ['completed', 'completed_with_errors', 'failed', 'canceled'], true)) {
                     $scheduled = self::schedule_job($job_id);
                     if (is_wp_error($scheduled)) {
                         throw new RuntimeException($scheduled->get_error_message());
@@ -199,7 +203,7 @@ class FgBackup_Async {
         $job_id = sanitize_key($job_id);
         $job = self::get_status_raw($job_id);
 
-        if (!is_array($job) || in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
+        if (!is_array($job) || in_array($job['status'], ['completed', 'completed_with_errors', 'failed', 'canceled'], true)) {
             return $job;
         }
 
@@ -250,15 +254,7 @@ class FgBackup_Async {
 
     private static function initialize_job(array &$job) {
         $source_root = FgBackup_Backup::get_source_root();
-        if (FgBackup_Sftp::enabled()) {
-            $sftp_settings = FgBackup_Sftp::settings();
-            if (!FgBackup_Sftp::available()) {
-                throw new RuntimeException(__('SFTP ist aktiviert, aber phpseclib fehlt.', 'fg-backup-pro'));
-            }
-            if ($sftp_settings['host'] === '' || $sftp_settings['username'] === '' || $sftp_settings['host_key'] === '') {
-                throw new RuntimeException(__('SFTP ist nicht vollständig eingerichtet. Bitte Verbindung speichern und testen.', 'fg-backup-pro'));
-            }
-        }
+        FgBackup_Remotes::assert_enabled_configuration();
         $space = FgBackup_Backup::estimate_initial_space($job['type'], $job['format']);
         FgBackup_Backup::assert_free_space(FgBackup_Storage::get_temp_root(), $space['required']);
 
@@ -544,12 +540,15 @@ class FgBackup_Async {
         $job['checksum'] = '';
         $job['local_verified'] = true;
 
-        if (FgBackup_Sftp::enabled()) {
+        $job['remote_queue'] = isset($job['remote_queue']) && is_array($job['remote_queue'])
+            ? array_values($job['remote_queue'])
+            : FgBackup_Remotes::enabled_ids();
+        if ($job['remote_queue']) {
             $job['progress'] = 95;
-            $job['stage'] = __('SFTP wird vorbereitet', 'fg-backup-pro');
-            $job['detail'] = __('Lokales Backup abgeschlossen. Remote-Ziel wird verbunden.', 'fg-backup-pro');
+            $job['stage'] = __('Remote-Uploads werden vorbereitet', 'fg-backup-pro');
+            $job['detail'] = __('Lokales Backup abgeschlossen. Remote-Ziele werden verbunden.', 'fg-backup-pro');
             $job['remote_status'] = 'preparing';
-            $job['step'] = 'sftp_prepare';
+            $job['step'] = 'remote_prepare';
         } else {
             $job['progress'] = 98;
             $job['stage'] = __('Abschluss', 'fg-backup-pro');
@@ -558,70 +557,211 @@ class FgBackup_Async {
         }
     }
 
-    private static function prepare_sftp_upload(array &$job) {
-        $upload = FgBackup_Sftp::prepare_upload($job['final_path'], $job['file']);
-        $job = array_merge($job, $upload);
-        $job['remote_status'] = 'uploading';
-        $job['step'] = 'sftp_upload';
-        $job['progress'] = 95;
-        $job['stage'] = __('SFTP-Upload', 'fg-backup-pro');
-        $job['detail'] = sprintf(__('Ziel: %s', 'fg-backup-pro'), $job['remote_path']);
+    private static function process_remote_step(array &$job) {
+        // Alte 2.0-Jobs werden beim nächsten Schritt auf die generische Remote-Pipeline umgestellt.
+        if (strpos((string) $job['step'], 'sftp_') === 0) {
+            $job['remote_queue'] = ['sftp'];
+            $job['remote_index'] = 0;
+            $job['remote_current'] = 'sftp';
+            $job['remote_state'] = [
+                'remote_path' => isset($job['remote_path']) ? $job['remote_path'] : '',
+                'remote_temp' => isset($job['remote_temp']) ? $job['remote_temp'] : '',
+                'offset' => isset($job['remote_offset']) ? (int) $job['remote_offset'] : 0,
+                'total' => isset($job['remote_total']) ? (int) $job['remote_total'] : 0,
+            ];
+            $job['step'] = str_replace('sftp_', 'remote_', $job['step']);
+        }
+
+        try {
+            if ($job['step'] === 'remote_prepare') {
+                self::prepare_remote_upload($job);
+            } elseif ($job['step'] === 'remote_upload') {
+                self::process_remote_upload($job);
+            } elseif ($job['step'] === 'remote_finalize') {
+                self::finalize_remote_upload($job);
+            }
+        } catch (Throwable $exception) {
+            if (self::is_cancel_requested($job['id'], true)) {
+                return;
+            }
+            self::record_remote_failure($job, $exception->getMessage());
+            self::advance_remote($job);
+        }
     }
 
-    private static function process_sftp_upload(array &$job) {
-        $total = max(1, (int) $job['remote_total']);
-        $offset = max(0, (int) $job['remote_offset']);
-        if ($offset >= $total) {
-            $job['step'] = 'sftp_finalize';
+    private static function prepare_remote_upload(array &$job) {
+        $queue = isset($job['remote_queue']) && is_array($job['remote_queue']) ? array_values($job['remote_queue']) : [];
+        $index = isset($job['remote_index']) ? (int) $job['remote_index'] : 0;
+        if (!isset($queue[$index])) {
+            self::finish_remote_sequence($job);
             return;
         }
 
-        $written = FgBackup_Sftp::upload_batch(
-            $job['final_path'],
-            $job['remote_temp'],
-            $offset,
-            4,
-            static function () use ($job) {
-                return self::is_cancel_requested($job['id'], true);
-            }
-        );
-        $written = max(0, (int) $written);
-        if ($written <= 0 && $offset < $total) {
-            throw new RuntimeException(__('Der SFTP-Upload hat keinen Fortschritt gemacht.', 'fg-backup-pro'));
+        $target = sanitize_key($queue[$index]);
+        $job['remote_current'] = $target;
+        $job['remote_state'] = FgBackup_Remotes::prepare($target, $job['final_path'], $job['file']);
+        self::sync_legacy_remote_fields($job);
+        $job['remote_status'] = 'uploading';
+        $job['remote_results'][$target] = [
+            'label' => FgBackup_Remotes::label($target),
+            'status' => 'uploading',
+            'path' => isset($job['remote_state']['remote_path']) ? $job['remote_state']['remote_path'] : '',
+            'error' => '',
+        ];
+        $job['step'] = 'remote_upload';
+        $job['progress'] = self::remote_progress($job, 0);
+        $job['stage'] = sprintf(__('%s-Upload', 'fg-backup-pro'), FgBackup_Remotes::label($target));
+        $job['detail'] = !empty($job['remote_state']['remote_path'])
+            ? sprintf(__('Ziel: %s', 'fg-backup-pro'), $job['remote_state']['remote_path'])
+            : __('Upload wird vorbereitet.', 'fg-backup-pro');
+    }
+
+    private static function process_remote_upload(array &$job) {
+        $target = isset($job['remote_current']) ? sanitize_key($job['remote_current']) : '';
+        if ($target === '') {
+            throw new RuntimeException(__('Das aktuelle Remote-Ziel fehlt.', 'fg-backup-pro'));
         }
 
-        $job['remote_offset'] = min($total, $offset + $written);
-        $ratio = min(1, $job['remote_offset'] / $total);
-        $job['progress'] = 95 + (int) floor($ratio * 4);
-        $job['stage'] = __('SFTP-Upload', 'fg-backup-pro');
+        $state = isset($job['remote_state']) && is_array($job['remote_state']) ? $job['remote_state'] : [];
+        $job['remote_state'] = FgBackup_Remotes::upload(
+            $target,
+            $job['final_path'],
+            $state,
+            static function () use ($job) {
+                return self::is_cancel_requested($job['id'], true);
+            },
+            static function ($uploaded, $total) use (&$job, $target) {
+                $ratio = $total > 0 ? min(1, max(0, $uploaded / $total)) : 0;
+                $job['progress'] = self::remote_progress($job, $ratio);
+                $job['stage'] = sprintf(__('%s-Upload', 'fg-backup-pro'), FgBackup_Remotes::label($target));
+                $job['detail'] = sprintf(
+                    __('%1$s von %2$s hochgeladen', 'fg-backup-pro'),
+                    size_format((int) $uploaded, 1),
+                    size_format((int) $total, 1)
+                );
+                $job['updated_at'] = time();
+                update_option(self::option_name($job['id']), $job, false);
+            }
+        );
+        self::sync_legacy_remote_fields($job);
+
+        $offset = isset($job['remote_state']['offset']) ? (int) $job['remote_state']['offset'] : 0;
+        $total = isset($job['remote_state']['total']) ? max(1, (int) $job['remote_state']['total']) : 1;
+        $ratio = min(1, $offset / $total);
+        $job['progress'] = self::remote_progress($job, $ratio);
+        $job['stage'] = sprintf(__('%s-Upload', 'fg-backup-pro'), FgBackup_Remotes::label($target));
         $job['detail'] = sprintf(
             __('%1$s von %2$s hochgeladen', 'fg-backup-pro'),
-            size_format((int) $job['remote_offset'], 1),
+            size_format($offset, 1),
             size_format($total, 1)
         );
-        if ($job['remote_offset'] >= $total) {
-            $job['step'] = 'sftp_finalize';
-            $job['stage'] = __('SFTP wird geprüft', 'fg-backup-pro');
+
+        if (!empty($job['remote_state']['done']) || $offset >= $total) {
+            $job['step'] = 'remote_finalize';
+            $job['stage'] = sprintf(__('%s wird geprüft', 'fg-backup-pro'), FgBackup_Remotes::label($target));
             $job['detail'] = __('Remote-Datei wird geprüft und finalisiert.', 'fg-backup-pro');
         }
     }
 
-    private static function finalize_sftp_upload(array &$job) {
-        FgBackup_Sftp::finalize_upload($job['remote_temp'], $job['remote_path'], $job['remote_total']);
-        $job['remote_status'] = 'completed';
-        $job['remote_temp'] = '';
-        $job['progress'] = 99;
-        $job['stage'] = __('SFTP abgeschlossen', 'fg-backup-pro');
-        $job['detail'] = $job['remote_path'];
-
-        if (!FgBackup_Sftp::settings()['keep_local'] && !empty($job['final_path']) && is_file($job['final_path'])) {
-            if (!@unlink($job['final_path'])) {
-                throw new RuntimeException(__('Der SFTP-Upload war erfolgreich, die lokale Backup-Datei konnte aber nicht gelöscht werden.', 'fg-backup-pro'));
-            }
-            $job['local_deleted'] = true;
-            $job['file'] = '';
+    private static function finalize_remote_upload(array &$job) {
+        $target = isset($job['remote_current']) ? sanitize_key($job['remote_current']) : '';
+        if ($target === '') {
+            throw new RuntimeException(__('Das aktuelle Remote-Ziel fehlt.', 'fg-backup-pro'));
         }
+        $path = FgBackup_Remotes::finalize($target, isset($job['remote_state']) ? (array) $job['remote_state'] : []);
+        $job['remote_results'][$target] = [
+            'label' => FgBackup_Remotes::label($target),
+            'status' => 'completed',
+            'path' => (string) $path,
+            'error' => '',
+        ];
+        $job['remote_path'] = (string) $path;
+        $job['remote_status'] = 'completed';
+        $job['stage'] = sprintf(__('%s abgeschlossen', 'fg-backup-pro'), FgBackup_Remotes::label($target));
+        $job['detail'] = (string) $path;
+        self::advance_remote($job);
+    }
+
+    private static function record_remote_failure(array &$job, $message) {
+        $target = isset($job['remote_current']) ? sanitize_key($job['remote_current']) : '';
+        if ($target === '') {
+            $queue = isset($job['remote_queue']) ? (array) $job['remote_queue'] : [];
+            $index = isset($job['remote_index']) ? (int) $job['remote_index'] : 0;
+            $target = isset($queue[$index]) ? sanitize_key($queue[$index]) : 'remote';
+        }
+        FgBackup_Remotes::remove_partial($target, isset($job['remote_state']) ? (array) $job['remote_state'] : []);
+        $clean_message = sanitize_text_field((string) $message);
+        $job['remote_errors'][$target] = $clean_message;
+        $job['remote_results'][$target] = [
+            'label' => FgBackup_Remotes::label($target),
+            'status' => 'failed',
+            'path' => !empty($job['remote_state']['remote_path']) ? $job['remote_state']['remote_path'] : '',
+            'error' => $clean_message,
+        ];
+        $job['remote_status'] = 'failed';
+    }
+
+    private static function advance_remote(array &$job) {
+        $job['remote_index'] = isset($job['remote_index']) ? (int) $job['remote_index'] + 1 : 1;
+        $job['remote_current'] = '';
+        $job['remote_state'] = [];
+        $job['remote_temp'] = '';
+        $job['remote_offset'] = 0;
+        $job['remote_total'] = 0;
+        $queue = isset($job['remote_queue']) && is_array($job['remote_queue']) ? array_values($job['remote_queue']) : [];
+        if (isset($queue[$job['remote_index']])) {
+            $next = sanitize_key($queue[$job['remote_index']]);
+            $job['step'] = 'remote_prepare';
+            $job['remote_status'] = 'preparing';
+            $job['progress'] = self::remote_progress($job, 0);
+            $job['stage'] = sprintf(__('%s wird vorbereitet', 'fg-backup-pro'), FgBackup_Remotes::label($next));
+            $job['detail'] = __('Nächstes Remote-Ziel wird verbunden.', 'fg-backup-pro');
+            return;
+        }
+        self::finish_remote_sequence($job);
+    }
+
+    private static function finish_remote_sequence(array &$job) {
+        $queue = isset($job['remote_queue']) && is_array($job['remote_queue']) ? $job['remote_queue'] : [];
+        $errors = isset($job['remote_errors']) && is_array($job['remote_errors']) ? $job['remote_errors'] : [];
+        $delete_local = !empty($queue) && empty($errors);
+        foreach ($queue as $target) {
+            if (FgBackup_Remotes::keep_local($target)) {
+                $delete_local = false;
+                break;
+            }
+        }
+
+        if ($delete_local && !empty($job['final_path']) && is_file($job['final_path'])) {
+            if (!@unlink($job['final_path'])) {
+                $job['remote_errors']['local'] = __('Alle Remote-Uploads waren erfolgreich, die lokale Backup-Datei konnte aber nicht gelöscht werden.', 'fg-backup-pro');
+            } else {
+                $job['local_deleted'] = true;
+                $job['file'] = '';
+            }
+        }
+        $job['progress'] = 99;
         $job['step'] = 'cleanup';
+        $job['stage'] = empty($job['remote_errors'])
+            ? __('Remote-Uploads abgeschlossen', 'fg-backup-pro')
+            : __('Remote-Uploads mit Fehlern', 'fg-backup-pro');
+        $job['detail'] = FgBackup_Remotes::summarize(isset($job['remote_results']) ? (array) $job['remote_results'] : []);
+    }
+
+    private static function remote_progress(array $job, $target_ratio) {
+        $queue = isset($job['remote_queue']) && is_array($job['remote_queue']) ? array_values($job['remote_queue']) : [];
+        $count = max(1, count($queue));
+        $index = max(0, min($count - 1, isset($job['remote_index']) ? (int) $job['remote_index'] : 0));
+        $overall = ($index + min(1, max(0, (float) $target_ratio))) / $count;
+        return min(99, 95 + (int) floor($overall * 4));
+    }
+
+    private static function sync_legacy_remote_fields(array &$job) {
+        $state = isset($job['remote_state']) && is_array($job['remote_state']) ? $job['remote_state'] : [];
+        $job['remote_path'] = isset($state['remote_path']) ? (string) $state['remote_path'] : '';
+        $job['remote_temp'] = isset($state['remote_temp']) ? (string) $state['remote_temp'] : '';
+        $job['remote_offset'] = isset($state['offset']) ? (int) $state['offset'] : 0;
+        $job['remote_total'] = isset($state['total']) ? (int) $state['total'] : 0;
     }
 
     private static function complete_job(array &$job) {
@@ -630,13 +770,20 @@ class FgBackup_Async {
         }
 
         FgBackup_Cleanup::rotate_backups();
-        $job['status'] = 'completed';
+        $has_remote_errors = !empty($job['remote_errors']);
+        $job['status'] = $has_remote_errors ? 'completed_with_errors' : 'completed';
         $job['progress'] = 100;
-        $job['stage'] = __('Abgeschlossen', 'fg-backup-pro');
-        if (!empty($job['remote_path'])) {
-            $job['detail'] = !empty($job['local_deleted'])
-                ? sprintf(__('SFTP: %s · lokal gelöscht', 'fg-backup-pro'), $job['remote_path'])
-                : sprintf(__('SFTP: %s', 'fg-backup-pro'), $job['remote_path']);
+        $job['stage'] = $has_remote_errors
+            ? __('Abgeschlossen mit Fehlern', 'fg-backup-pro')
+            : __('Abgeschlossen', 'fg-backup-pro');
+        $remote_summary = FgBackup_Remotes::summarize(isset($job['remote_results']) ? (array) $job['remote_results'] : []);
+        if ($remote_summary !== '') {
+            $job['detail'] = $remote_summary;
+            if (!empty($job['local_deleted'])) {
+                $job['detail'] .= ' · ' . __('lokal gelöscht', 'fg-backup-pro');
+            } elseif (!empty($job['file'])) {
+                $job['detail'] .= ' · ' . sprintf(__('lokal: %s', 'fg-backup-pro'), $job['file']);
+            }
         } else {
             $job['detail'] = isset($job['file']) ? $job['file'] : '';
         }
@@ -644,7 +791,11 @@ class FgBackup_Async {
         self::add_history($job);
         self::release_lock($job['id']);
         delete_option(self::cancel_option_name($job['id']));
-        FgBackup_Notifications::success($job);
+        if ($has_remote_errors) {
+            FgBackup_Notifications::warning($job);
+        } else {
+            FgBackup_Notifications::success($job);
+        }
     }
 
     private static function fail_job(array $job, $message) {
@@ -655,7 +806,9 @@ class FgBackup_Async {
         $job['finished_at'] = time();
         $job['updated_at'] = time();
 
-        if (!empty($job['remote_temp'])) {
+        if (!empty($job['remote_current'])) {
+            FgBackup_Remotes::remove_partial($job['remote_current'], isset($job['remote_state']) ? (array) $job['remote_state'] : []);
+        } elseif (!empty($job['remote_temp'])) {
             FgBackup_Sftp::remove_partial($job['remote_temp']);
         }
         if (!empty($job['local_verified']) && isset($job['remote_status']) && $job['remote_status'] !== 'completed') {
@@ -681,7 +834,7 @@ class FgBackup_Async {
             return new WP_Error('fg_backup_not_found', __('Backup-Job nicht gefunden.', 'fg-backup-pro'));
         }
 
-        if (in_array($job['status'], ['completed', 'failed', 'canceled'], true)) {
+        if (in_array($job['status'], ['completed', 'completed_with_errors', 'failed', 'canceled'], true)) {
             return new WP_Error('fg_backup_finished', __('Das Backup ist bereits beendet.', 'fg-backup-pro'));
         }
 
@@ -689,7 +842,7 @@ class FgBackup_Async {
         $job['status'] = 'cancel_requested';
         $job['stage'] = __('Abbruch angefordert', 'fg-backup-pro');
         $job['detail'] = !empty($job['local_verified'])
-            ? __('Der laufende SFTP-Schritt wird beendet. Das fertige lokale Backup bleibt erhalten.', 'fg-backup-pro')
+            ? __('Der laufende Remote-Schritt wird beendet. Das fertige lokale Backup bleibt erhalten.', 'fg-backup-pro')
             : __('Der aktuelle Arbeitsschritt wird beendet und temporäre Daten werden entfernt.', 'fg-backup-pro');
         $job['updated_at'] = time();
         update_option(self::option_name($job_id), $job, false);
@@ -725,7 +878,16 @@ class FgBackup_Async {
 
         wp_clear_scheduled_hook(self::CRON_HOOK, [$job_id]);
 
-        if (!empty($job['remote_temp'])) {
+        if (!empty($job['remote_current'])) {
+            FgBackup_Remotes::remove_partial($job['remote_current'], isset($job['remote_state']) ? (array) $job['remote_state'] : []);
+            $job['remote_status'] = 'canceled';
+            $job['remote_results'][$job['remote_current']] = [
+                'label' => FgBackup_Remotes::label($job['remote_current']),
+                'status' => 'canceled',
+                'path' => !empty($job['remote_state']['remote_path']) ? $job['remote_state']['remote_path'] : '',
+                'error' => '',
+            ];
+        } elseif (!empty($job['remote_temp'])) {
             FgBackup_Sftp::remove_partial($job['remote_temp']);
             $job['remote_status'] = 'canceled';
         }
@@ -741,7 +903,7 @@ class FgBackup_Async {
         $job['status'] = 'canceled';
         $job['stage'] = __('Abgebrochen', 'fg-backup-pro');
         $job['detail'] = !empty($job['local_verified'])
-            ? __('SFTP-Upload abgebrochen. Das fertige lokale Backup bleibt erhalten.', 'fg-backup-pro')
+            ? __('Remote-Upload abgebrochen. Das fertige lokale Backup bleibt erhalten.', 'fg-backup-pro')
             : __('Temporäre Backup-Daten wurden entfernt.', 'fg-backup-pro');
         $job['error'] = '';
         if (empty($job['local_verified'])) {
@@ -778,6 +940,8 @@ class FgBackup_Async {
             'note' => isset($job['note']) ? $job['note'] : '',
             'remote_status' => isset($job['remote_status']) ? $job['remote_status'] : 'disabled',
             'remote_path' => isset($job['remote_path']) ? $job['remote_path'] : '',
+            'remote_results' => isset($job['remote_results']) ? (array) $job['remote_results'] : [],
+            'remote_errors' => isset($job['remote_errors']) ? (array) $job['remote_errors'] : [],
             'local_deleted' => !empty($job['local_deleted']),
         ]);
 
@@ -805,7 +969,7 @@ class FgBackup_Async {
 
         $created = isset($active['created_at']) ? (int) $active['created_at'] : 0;
         $job = self::get_status_raw($active['job_id']);
-        $finished = is_array($job) && in_array($job['status'], ['completed', 'failed', 'canceled'], true);
+        $finished = is_array($job) && in_array($job['status'], ['completed', 'completed_with_errors', 'failed', 'canceled'], true);
 
         if (is_array($job) && $job['status'] === 'cancel_requested' && !self::is_process_active($active['job_id'])) {
             self::cancel_job($job);

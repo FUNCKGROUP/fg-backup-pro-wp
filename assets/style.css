@@ -285,3 +285,48 @@
         white-space: normal;
     }
 }
+
+.fg-backup-remote-table[hidden],
+.fg-backup-dropbox-manual[hidden] {
+    display: none;
+}
+
+.fg-backup-remote-table td:first-child {
+    overflow-wrap: anywhere;
+}
+
+.fg-backup-dropbox-actions,
+.fg-backup-inline-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.fg-backup-dropbox-manual {
+    max-width: 680px;
+    margin-top: 12px;
+    padding: 12px;
+    border-left: 4px solid #2271b1;
+    background: #f0f6fc;
+}
+
+.fg-backup-dropbox-manual p {
+    margin-top: 0;
+}
+
+.fg-backup-connection-ok {
+    margin-right: 8px;
+    color: #008a20;
+}
+
+.fg-backup-note-error {
+    color: #b32d2e;
+}
+
+@media (max-width: 782px) {
+    .fg-backup-inline-controls > * {
+        width: 100%;
+    }
+}

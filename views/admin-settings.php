@@ -2,6 +2,8 @@
 
 defined('ABSPATH') || exit;
 
+FgBackup_Admin::render_settings_notices('fg_backup_settings');
+
 $filename_pattern = get_option('fg_backup_filename_pattern', FgBackup_Backup::default_filename_pattern());
 $preview_type = get_option('fg_backup_type', 'full') === 'db' ? 'db' : 'full';
 $preview_format = $preview_type === 'full'

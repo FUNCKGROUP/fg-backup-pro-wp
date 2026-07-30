@@ -361,6 +361,8 @@ class FgBackup_Backup {
             ));
         }
 
+        $rows = self::redact_sensitive_option_rows($rows);
+
         $buffer = '';
         foreach ($rows as $row) {
             $columns = [];
@@ -387,6 +389,41 @@ class FgBackup_Backup {
             'rows' => count($rows),
             'done' => count($rows) < $limit,
         ];
+    }
+
+    private static function redact_sensitive_option_rows(array $rows) {
+        $sensitive = [
+            'fg_backup_sftp_password',
+            'fg_backup_sftp_key_passphrase',
+            'fg_backup_webdav_password',
+            'fg_backup_dropbox_access_token',
+            'fg_backup_dropbox_refresh_token',
+            'fg_backup_dropbox_oauth_pending',
+            'fg_backup_dropbox_oauth_error',
+            'fg_backup_dropbox_token',
+            'fg_backup_gdrive_token',
+            'fg_backup_s3_key',
+            'fg_backup_s3_secret',
+            'fg_backup_s3c_key',
+            'fg_backup_s3c_secret',
+            'fg_backup_ftp_pass',
+            'fg_backup_webdav_pass',
+            'fg_backup_onedrive_token',
+        ];
+
+        foreach ($rows as &$row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $name_column = array_key_exists('option_name', $row) ? 'option_name' : (array_key_exists('meta_key', $row) ? 'meta_key' : '');
+            $value_column = array_key_exists('option_value', $row) ? 'option_value' : (array_key_exists('meta_value', $row) ? 'meta_value' : '');
+            if ($name_column !== '' && $value_column !== '' && in_array((string) $row[$name_column], $sensitive, true)) {
+                $row[$value_column] = '';
+            }
+        }
+        unset($row);
+
+        return $rows;
     }
 
     private static function quote_identifier($identifier) {

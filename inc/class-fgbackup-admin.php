@@ -16,6 +16,18 @@ class FgBackup_Admin {
         add_action('wp_ajax_fg_backup_sftp_reset_key', [__CLASS__, 'ajax_sftp_reset_key']);
         add_action('wp_ajax_fg_backup_sftp_list', [__CLASS__, 'ajax_sftp_list']);
         add_action('wp_ajax_fg_backup_sftp_delete', [__CLASS__, 'ajax_sftp_delete']);
+        add_action('wp_ajax_fg_backup_webdav_test', [__CLASS__, 'ajax_webdav_test']);
+        add_action('wp_ajax_fg_backup_webdav_list', [__CLASS__, 'ajax_webdav_list']);
+        add_action('wp_ajax_fg_backup_webdav_delete', [__CLASS__, 'ajax_webdav_delete']);
+        add_action('wp_ajax_fg_backup_dropbox_begin_relay', [__CLASS__, 'ajax_dropbox_begin_relay']);
+        add_action('wp_ajax_fg_backup_dropbox_begin_manual', [__CLASS__, 'ajax_dropbox_begin_manual']);
+        add_action('wp_ajax_fg_backup_dropbox_complete_manual', [__CLASS__, 'ajax_dropbox_complete_manual']);
+        add_action('wp_ajax_fg_backup_dropbox_oauth_status', [__CLASS__, 'ajax_dropbox_oauth_status']);
+        add_action('wp_ajax_fg_backup_dropbox_disconnect', [__CLASS__, 'ajax_dropbox_disconnect']);
+        add_action('wp_ajax_fg_backup_dropbox_test', [__CLASS__, 'ajax_dropbox_test']);
+        add_action('wp_ajax_fg_backup_dropbox_list', [__CLASS__, 'ajax_dropbox_list']);
+        add_action('wp_ajax_fg_backup_dropbox_delete', [__CLASS__, 'ajax_dropbox_delete']);
+        add_action('rest_api_init', [__CLASS__, 'register_rest_routes']);
         add_action('admin_post_fg_backup_download', [__CLASS__, 'download']);
         add_action('admin_post_fg_backup_delete', [__CLASS__, 'delete']);
     }
@@ -72,6 +84,20 @@ class FgBackup_Admin {
             'fg_backup_sftp_keep_local' => 1,
             'fg_backup_sftp_host_key' => '',
             'fg_backup_sftp_host_key_target' => '',
+            'fg_backup_webdav_enabled' => 0,
+            'fg_backup_webdav_base_url' => '',
+            'fg_backup_webdav_username' => '',
+            'fg_backup_webdav_password' => '',
+            'fg_backup_webdav_remote_dir' => '/backups/%host',
+            'fg_backup_webdav_retention' => 10,
+            'fg_backup_webdav_keep_local' => 1,
+            'fg_backup_webdav_allow_private' => 0,
+            'fg_backup_dropbox_enabled' => 0,
+            'fg_backup_dropbox_app_key' => '',
+            'fg_backup_dropbox_relay_url' => 'https://lizenz.funckgroup-server.com/wp-json/fg-dropbox-relay/v1',
+            'fg_backup_dropbox_remote_dir' => '/backups/%host',
+            'fg_backup_dropbox_retention' => 10,
+            'fg_backup_dropbox_keep_local' => 1,
         ];
 
         foreach ($defaults as $name => $value) {
@@ -193,6 +219,50 @@ class FgBackup_Admin {
         register_setting('fg_backup_sftp_settings', 'fg_backup_sftp_keep_local', [
             'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 1,
         ]);
+
+        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_enabled', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_base_url', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_webdav_url'], 'default' => '',
+        ]);
+        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_username', [
+            'type' => 'string', 'sanitize_callback' => 'sanitize_text_field', 'default' => '',
+        ]);
+        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_password', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_webdav_password'], 'default' => '',
+        ]);
+        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_remote_dir', [
+            'type' => 'string', 'sanitize_callback' => ['FgBackup_Webdav', 'sanitize_remote_dir'], 'default' => '/backups/%host',
+        ]);
+        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_retention', [
+            'type' => 'integer', 'sanitize_callback' => [__CLASS__, 'sanitize_remote_retention'], 'default' => 10,
+        ]);
+        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_keep_local', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 1,
+        ]);
+        register_setting('fg_backup_webdav_settings', 'fg_backup_webdav_allow_private', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+
+        register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_enabled', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 0,
+        ]);
+        register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_app_key', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_dropbox_app_key'], 'default' => '',
+        ]);
+        register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_relay_url', [
+            'type' => 'string', 'sanitize_callback' => [__CLASS__, 'sanitize_dropbox_relay_url'], 'default' => 'https://lizenz.funckgroup-server.com/wp-json/fg-dropbox-relay/v1',
+        ]);
+        register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_remote_dir', [
+            'type' => 'string', 'sanitize_callback' => ['FgBackup_Dropbox', 'sanitize_remote_dir'], 'default' => '/backups/%host',
+        ]);
+        register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_retention', [
+            'type' => 'integer', 'sanitize_callback' => [__CLASS__, 'sanitize_remote_retention'], 'default' => 10,
+        ]);
+        register_setting('fg_backup_dropbox_settings', 'fg_backup_dropbox_keep_local', [
+            'type' => 'boolean', 'sanitize_callback' => [__CLASS__, 'sanitize_checkbox'], 'default' => 1,
+        ]);
     }
 
     public static function sanitize_type($value) {
@@ -255,18 +325,39 @@ class FgBackup_Admin {
     }
 
     public static function sanitize_sftp_retention($value) {
+        return self::sanitize_remote_retention($value);
+    }
+
+    public static function sanitize_remote_retention($value) {
         return max(1, min(100, (int) $value));
     }
 
     public static function sanitize_sftp_password($value) {
-        return self::sanitize_secret_option($value, 'fg_backup_sftp_password');
+        return self::sanitize_secret_option($value, 'fg_backup_sftp_password', 'fg_backup_sftp_settings');
     }
 
     public static function sanitize_sftp_passphrase($value) {
-        return self::sanitize_secret_option($value, 'fg_backup_sftp_key_passphrase');
+        return self::sanitize_secret_option($value, 'fg_backup_sftp_key_passphrase', 'fg_backup_sftp_settings');
     }
 
-    private static function sanitize_secret_option($value, $option) {
+    public static function sanitize_webdav_url($value) {
+        return FgBackup_Webdav::sanitize_base_url($value);
+    }
+
+    public static function sanitize_webdav_password($value) {
+        return self::sanitize_secret_option($value, 'fg_backup_webdav_password', 'fg_backup_webdav_settings');
+    }
+
+    public static function sanitize_dropbox_app_key($value) {
+        return preg_replace('/[^A-Za-z0-9_-]+/', '', (string) $value);
+    }
+
+    public static function sanitize_dropbox_relay_url($value) {
+        $value = rtrim(esc_url_raw(trim((string) $value), ['https']), '/');
+        return $value;
+    }
+
+    private static function sanitize_secret_option($value, $option, $settings_group) {
         $value = (string) $value;
         if ($value === '') {
             return (string) get_option($option, '');
@@ -274,7 +365,7 @@ class FgBackup_Admin {
         try {
             return FgBackup_Secrets::encrypt($value);
         } catch (Throwable $exception) {
-            add_settings_error('fg_backup_sftp_settings', 'fg_backup_secret_error', $exception->getMessage(), 'error');
+            add_settings_error($settings_group, 'fg_backup_secret_error', $exception->getMessage(), 'error');
             return (string) get_option($option, '');
         }
     }
@@ -292,6 +383,37 @@ class FgBackup_Admin {
 
     public static function sanitize_checkbox($value) {
         return empty($value) ? 0 : 1;
+    }
+
+    public static function render_settings_notices($settings_group) {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $messages = get_settings_errors((string) $settings_group);
+        $has_error = false;
+        $has_success = false;
+
+        foreach ($messages as $message) {
+            $type = isset($message['type']) ? (string) $message['type'] : 'error';
+            if ($type === 'error') {
+                $has_error = true;
+            }
+            if (in_array($type, ['success', 'updated'], true)) {
+                $has_success = true;
+            }
+        }
+
+        settings_errors((string) $settings_group);
+
+        $settings_updated = isset($_GET['settings-updated'])
+            && sanitize_text_field(wp_unslash((string) $_GET['settings-updated'])) === 'true';
+
+        if ($settings_updated && !$has_error && !$has_success) {
+            echo '<div class="notice notice-success is-dismissible"><p>'
+                . esc_html__('Einstellungen gespeichert.', 'fg-backup-pro')
+                . '</p></div>';
+        }
     }
 
     public static function enqueue_assets() {
@@ -329,10 +451,19 @@ class FgBackup_Admin {
             'sftpListEmptyText' => __('Keine Remote-Backups gefunden.', 'fg-backup-pro'),
             'sftpDeleteConfirmText' => __('Remote-Backup wirklich löschen?', 'fg-backup-pro'),
             'sftpDeleteText' => __('Löschen', 'fg-backup-pro'),
+            'webdavTestText' => __('WebDAV-Verbindung wird getestet …', 'fg-backup-pro'),
+            'dropboxTestText' => __('Dropbox-Verbindung wird getestet …', 'fg-backup-pro'),
+            'remoteListLoadingText' => __('Remote-Dateien werden geladen …', 'fg-backup-pro'),
+            'remoteListEmptyText' => __('Keine Remote-Backups gefunden.', 'fg-backup-pro'),
+            'remoteDeleteConfirmText' => __('Remote-Backup wirklich löschen?', 'fg-backup-pro'),
+            'remoteDeleteText' => __('Löschen', 'fg-backup-pro'),
+            'dropboxConnectingText' => __('Dropbox-Verbindung wird vorbereitet …', 'fg-backup-pro'),
+            'dropboxWaitingText' => __('Warte auf die Dropbox-Freigabe …', 'fg-backup-pro'),
+            'dropboxDisconnectConfirmText' => __('Dropbox-Verbindung wirklich trennen?', 'fg-backup-pro'),
             'spaceFullText' => __('Vollständiges Backup: mindestens %1$s temporärer Speicher; nach dem Dateiscan erfolgt eine genauere Prüfung.', 'fg-backup-pro'),
             'spaceDbText' => __('Datenbank-Backup: voraussichtlich %1$s temporärer Speicher.', 'fg-backup-pro'),
             'spaceAvailableText' => __('Frei: %s', 'fg-backup-pro'),
-            'localDeletedText' => __('Lokal nach erfolgreichem SFTP-Upload gelöscht.', 'fg-backup-pro'),
+            'localDeletedText' => __('Lokale Datei nach erfolgreichen Remote-Uploads gelöscht.', 'fg-backup-pro'),
             'activeJobId' => is_array($active_job) && !empty($active_job['id']) ? $active_job['id'] : '',
             'pageUrl' => admin_url('admin.php?page=fg-backup-pro'),
             'filenamePreview' => [
@@ -432,6 +563,31 @@ class FgBackup_Admin {
         include FG_BACKUP_DIR . 'views/admin-sftp.php';
     }
 
+    public static function render_webdav_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $webdav_settings = FgBackup_Webdav::settings();
+        include FG_BACKUP_DIR . 'views/admin-webdav.php';
+    }
+
+    public static function render_dropbox_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $dropbox_settings = FgBackup_Dropbox::settings();
+        $dropbox_account = FgBackup_Dropbox::account();
+        include FG_BACKUP_DIR . 'views/admin-dropbox.php';
+    }
+
+    public static function register_rest_routes() {
+        register_rest_route('fg-backup-pro/v1', '/dropbox/callback', [
+            'methods' => 'POST',
+            'callback' => ['FgBackup_Dropbox', 'rest_callback'],
+            'permission_callback' => '__return_true',
+        ]);
+    }
+
     public static function ajax_sftp_test() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
@@ -491,6 +647,126 @@ class FgBackup_Admin {
         }
     }
 
+    public static function ajax_webdav_test() {
+        self::assert_ajax_admin();
+        try {
+            $result = FgBackup_Webdav::test_connection();
+            wp_send_json_success([
+                'message' => sprintf(__('Verbindung erfolgreich. Ziel: %s', 'fg-backup-pro'), $result['directory']),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_webdav_list() {
+        self::assert_ajax_admin();
+        try {
+            wp_send_json_success([
+                'files' => FgBackup_Webdav::list_backups(),
+                'directory' => FgBackup_Webdav::resolved_remote_dir(),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_webdav_delete() {
+        self::assert_ajax_admin();
+        $file = isset($_POST['file']) ? sanitize_text_field(wp_unslash($_POST['file'])) : '';
+        try {
+            FgBackup_Webdav::delete_backup($file);
+            wp_send_json_success(['message' => __('Remote-Backup wurde gelöscht.', 'fg-backup-pro')]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_dropbox_begin_relay() {
+        self::assert_ajax_admin();
+        try {
+            wp_send_json_success(FgBackup_Dropbox::begin_relay_oauth());
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_dropbox_begin_manual() {
+        self::assert_ajax_admin();
+        try {
+            wp_send_json_success(FgBackup_Dropbox::begin_manual_oauth());
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_dropbox_complete_manual() {
+        self::assert_ajax_admin();
+        $code = isset($_POST['code']) ? sanitize_text_field(wp_unslash($_POST['code'])) : '';
+        try {
+            wp_send_json_success([
+                'account' => FgBackup_Dropbox::complete_manual_oauth($code),
+                'message' => __('Dropbox wurde verbunden.', 'fg-backup-pro'),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_dropbox_oauth_status() {
+        self::assert_ajax_admin();
+        wp_send_json_success(FgBackup_Dropbox::oauth_status());
+    }
+
+    public static function ajax_dropbox_disconnect() {
+        self::assert_ajax_admin();
+        FgBackup_Dropbox::disconnect();
+        wp_send_json_success(['message' => __('Dropbox-Verbindung wurde getrennt.', 'fg-backup-pro')]);
+    }
+
+    public static function ajax_dropbox_test() {
+        self::assert_ajax_admin();
+        try {
+            $result = FgBackup_Dropbox::test_connection();
+            $account = !empty($result['account']['name']) ? $result['account']['name'] : $result['account']['email'];
+            wp_send_json_success([
+                'message' => sprintf(__('Verbindung erfolgreich. Konto: %1$s · Ziel: %2$s', 'fg-backup-pro'), $account, $result['directory']),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_dropbox_list() {
+        self::assert_ajax_admin();
+        try {
+            wp_send_json_success([
+                'files' => FgBackup_Dropbox::list_backups(),
+                'directory' => FgBackup_Dropbox::resolved_remote_dir(),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public static function ajax_dropbox_delete() {
+        self::assert_ajax_admin();
+        $file = isset($_POST['file']) ? sanitize_text_field(wp_unslash($_POST['file'])) : '';
+        try {
+            FgBackup_Dropbox::delete_backup($file);
+            wp_send_json_success(['message' => __('Remote-Backup wurde gelöscht.', 'fg-backup-pro')]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    private static function assert_ajax_admin() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
+        }
+        check_ajax_referer('fg_backup_ajax', 'security');
+    }
+
     public static function ajax_start() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
@@ -533,6 +809,8 @@ class FgBackup_Admin {
             'finished_at' => isset($job['finished_at']) ? (int) $job['finished_at'] : 0,
             'remote_status' => isset($job['remote_status']) ? $job['remote_status'] : 'disabled',
             'remote_path' => isset($job['remote_path']) ? $job['remote_path'] : '',
+            'remote_results' => isset($job['remote_results']) ? (array) $job['remote_results'] : [],
+            'remote_summary' => FgBackup_Remotes::summarize(isset($job['remote_results']) ? (array) $job['remote_results'] : []),
             'local_deleted' => !empty($job['local_deleted']),
         ]);
     }

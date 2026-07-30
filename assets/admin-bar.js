@@ -22,6 +22,9 @@
             if (status === 'completed') {
                 return 'FG Backup Pro: Abgeschlossen';
             }
+            if (status === 'completed_with_errors') {
+                return 'FG Backup Pro: Mit Fehlern';
+            }
             if (status === 'canceled') {
                 return 'FG Backup Pro: Abgebrochen';
             }
@@ -62,7 +65,7 @@
                 }
 
                 var job = response.data;
-                if (job.status === 'completed' || job.status === 'failed' || job.status === 'canceled') {
+                if (job.status === 'completed' || job.status === 'completed_with_errors' || job.status === 'failed' || job.status === 'canceled') {
                     finish(job);
                     return;
                 }

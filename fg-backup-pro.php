@@ -2,8 +2,8 @@
 /**
  * Plugin Name: FG Backup Pro
  * Plugin URI: https://github.com/FUNCKGROUP/fg-backup-pro-wp
- * Description: Sichere WordPress-Backups mit asynchroner Verarbeitung, Prüfung, Rotation und SFTP.
- * Version: 2.0.0
+ * Description: Sichere WordPress-Backups mit asynchroner Verarbeitung, Prüfung, Rotation, SFTP, WebDAV und Dropbox.
+ * Version: 2.1.0
  * Author: FUNCKGROUP - Benedict von Funck
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -14,7 +14,7 @@
 
 defined('ABSPATH') || exit;
 
-define('FG_BACKUP_VERSION', '2.0.0');
+define('FG_BACKUP_VERSION', '2.1.0');
 define('FG_BACKUP_FILE', __FILE__);
 define('FG_BACKUP_DIR', plugin_dir_path(__FILE__));
 define('FG_BACKUP_URL', plugin_dir_url(__FILE__));
@@ -31,6 +31,9 @@ if (is_readable($core_bootstrap)) {
 
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-secrets.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-sftp.php';
+require_once FG_BACKUP_DIR . 'inc/class-fgbackup-webdav.php';
+require_once FG_BACKUP_DIR . 'inc/class-fgbackup-dropbox.php';
+require_once FG_BACKUP_DIR . 'inc/class-fgbackup-remotes.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-storage.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-backup.php';
 require_once FG_BACKUP_DIR . 'inc/class-fgbackup-cleanup.php';
@@ -48,7 +51,7 @@ function fg_backup_pro_register_with_core() {
         'slug'        => 'fg-backup-pro',
         'title'       => __('FG Backup Pro', 'fg-backup-pro'),
         'menu_title'  => __('FG Backup Pro', 'fg-backup-pro'),
-        'description' => __('Lokale Sicherungen, Zeitplanung, Backup-Prüfung und SFTP.', 'fg-backup-pro'),
+        'description' => __('Lokale Sicherungen, Zeitplanung und Remote-Ziele.', 'fg-backup-pro'),
         'version'     => FG_BACKUP_VERSION,
         'plugin_file' => FG_BACKUP_FILE,
         'default_tab' => 'backups',
@@ -68,6 +71,16 @@ function fg_backup_pro_register_with_core() {
                 'title'    => __('SFTP', 'fg-backup-pro'),
                 'callback' => ['FgBackup_Admin', 'render_sftp_page'],
                 'position' => 30,
+            ],
+            'webdav' => [
+                'title'    => __('WebDAV', 'fg-backup-pro'),
+                'callback' => ['FgBackup_Admin', 'render_webdav_page'],
+                'position' => 40,
+            ],
+            'dropbox' => [
+                'title'    => __('Dropbox', 'fg-backup-pro'),
+                'callback' => ['FgBackup_Admin', 'render_dropbox_page'],
+                'position' => 50,
             ],
         ],
     ]);

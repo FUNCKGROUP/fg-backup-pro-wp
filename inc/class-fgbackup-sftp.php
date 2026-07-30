@@ -487,4 +487,46 @@ class FgBackup_Sftp {
             $sftp->delete(rtrim($directory, '/') . '/' . $file['name']);
         }
     }
+
+    public static function assert_ready() {
+        if (!self::available()) {
+            throw new RuntimeException(__('SFTP ist aktiviert, aber phpseclib fehlt.', 'fg-backup-pro'));
+        }
+        $settings = self::settings();
+        self::assert_configuration($settings, true, false);
+    }
+
+    public static function upload_state($local_path, array $state, $cancel_callback = null, $progress_callback = null) {
+        $offset = isset($state['offset']) ? (int) $state['offset'] : (isset($state['remote_offset']) ? (int) $state['remote_offset'] : 0);
+        $total = isset($state['total']) ? (int) $state['total'] : (isset($state['remote_total']) ? (int) $state['remote_total'] : (int) filesize($local_path));
+        $remote_temp = isset($state['remote_temp']) ? (string) $state['remote_temp'] : '';
+        if ($remote_temp === '') {
+            throw new RuntimeException(__('Der temporäre SFTP-Pfad fehlt.', 'fg-backup-pro'));
+        }
+
+        $written = self::upload_batch($local_path, $remote_temp, $offset, 4, $cancel_callback);
+        $new_offset = min($total, $offset + max(0, (int) $written));
+        if (is_callable($progress_callback)) {
+            call_user_func($progress_callback, $new_offset, $total);
+        }
+
+        return [
+            'offset' => $new_offset,
+            'total' => $total,
+            'done' => $new_offset >= $total,
+        ];
+    }
+
+    public static function finalize_state(array $state) {
+        $remote_temp = isset($state['remote_temp']) ? (string) $state['remote_temp'] : '';
+        $remote_path = isset($state['remote_path']) ? (string) $state['remote_path'] : '';
+        $total = isset($state['total']) ? (int) $state['total'] : (isset($state['remote_total']) ? (int) $state['remote_total'] : 0);
+        self::finalize_upload($remote_temp, $remote_path, $total);
+        return $remote_path;
+    }
+
+    public static function remove_partial_state(array $state) {
+        self::remove_partial(isset($state['remote_temp']) ? $state['remote_temp'] : '');
+    }
+
 }
