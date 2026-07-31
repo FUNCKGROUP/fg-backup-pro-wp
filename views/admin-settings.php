@@ -16,7 +16,15 @@ $preview_filename = FgBackup_Backup::build_filename(
     'backup_demo1234',
     time()
 );
+$storage_mode = FgBackup_Storage::sanitize_mode_value((string) get_option('fg_backup_storage_mode', FgBackup_Storage::MODE_CONTENT));
+$storage_path = (string) get_option('fg_backup_storage_path', '');
+$storage_status = FgBackup_Storage::status();
+$storage_free = $storage_status['free_bytes'] !== null ? size_format($storage_status['free_bytes'], 2) : __('Unbekannt', 'fg-backup-pro');
 ?>
+
+<?php if (!empty($storage_status['fallback'])) : ?>
+    <div class="notice notice-warning"><p><?php echo esc_html($storage_status['fallback_reason']); ?></p></div>
+<?php endif; ?>
 
 <form method="post" action="options.php" class="fg-backup-settings">
     <?php settings_fields('fg_backup_settings'); ?>
@@ -128,6 +136,37 @@ $preview_filename = FgBackup_Backup::build_filename(
             </td>
         </tr>
         <tr>
+            <th scope="row"><label for="fg-backup-storage-mode"><?php esc_html_e('Lokaler Speicherort', 'fg-backup-pro'); ?></label></th>
+            <td>
+                <select name="fg_backup_storage_mode" id="fg-backup-storage-mode">
+                    <option value="content" <?php selected($storage_mode, FgBackup_Storage::MODE_CONTENT); ?>><?php esc_html_e('wp-content/.fg-private verwenden', 'fg-backup-pro'); ?></option>
+                    <option value="auto" <?php selected($storage_mode, FgBackup_Storage::MODE_AUTO); ?>><?php esc_html_e('Automatisch außerhalb des Webroots', 'fg-backup-pro'); ?></option>
+                    <option value="custom" <?php selected($storage_mode, FgBackup_Storage::MODE_CUSTOM); ?>><?php esc_html_e('Benutzerdefinierter Pfad', 'fg-backup-pro'); ?></option>
+                </select>
+
+                <div class="fg-backup-storage-custom" id="fg-backup-storage-custom" <?php echo $storage_mode === FgBackup_Storage::MODE_CUSTOM ? '' : 'hidden'; ?>>
+                    <label for="fg-backup-storage-path" class="screen-reader-text"><?php esc_html_e('Benutzerdefinierter lokaler Basispfad', 'fg-backup-pro'); ?></label>
+                    <input type="text" name="fg_backup_storage_path" id="fg-backup-storage-path" class="large-text code" value="<?php echo esc_attr($storage_path); ?>" placeholder="/var/www/vhosts/example.de/private">
+                    <p class="description"><?php esc_html_e('Absoluter lokaler Basispfad. FG Backup Pro legt darin ausschließlich den Unterordner fg-backup-pro an.', 'fg-backup-pro'); ?></p>
+                </div>
+
+                <p class="description"><?php esc_html_e('„Automatisch“ versucht zuerst einen beschreibbaren Ordner oberhalb des Webroots und fällt sonst sicher auf wp-content/.fg-private zurück.', 'fg-backup-pro'); ?></p>
+                <p class="description"><?php esc_html_e('Vorhandene Backups werden beim Wechsel des Speicherorts nicht automatisch verschoben.', 'fg-backup-pro'); ?></p>
+
+                <div class="fg-backup-storage-status" id="fg-backup-storage-status">
+                    <p><strong><?php esc_html_e('Aktueller Backup-Ordner:', 'fg-backup-pro'); ?></strong> <code id="fg-backup-storage-active-path"><?php echo esc_html($storage_status['backup_dir']); ?></code></p>
+                    <p>
+                        <span><?php esc_html_e('Schreibzugriff:', 'fg-backup-pro'); ?> <strong><?php echo !empty($storage_status['writable']) ? esc_html__('In Ordnung', 'fg-backup-pro') : esc_html__('Fehler', 'fg-backup-pro'); ?></strong></span>
+                        <span><?php esc_html_e('Freier Speicher:', 'fg-backup-pro'); ?> <strong><?php echo esc_html($storage_free); ?></strong></span>
+                        <span><?php esc_html_e('Außerhalb des Webroots:', 'fg-backup-pro'); ?> <strong><?php echo !empty($storage_status['outside_webroot']) ? esc_html__('Ja', 'fg-backup-pro') : esc_html__('Nein', 'fg-backup-pro'); ?></strong></span>
+                    </p>
+                </div>
+
+                <button type="button" class="button" id="fg-backup-storage-test"><?php esc_html_e('Speicherort prüfen', 'fg-backup-pro'); ?></button>
+                <span class="fg-backup-inline-result" id="fg-backup-storage-test-result" aria-live="polite"></span>
+            </td>
+        </tr>
+        <tr>
             <th scope="row"><?php esc_html_e('Remote-Ziele', 'fg-backup-pro'); ?></th>
             <td>
                 <fieldset>
@@ -209,7 +248,3 @@ $preview_filename = FgBackup_Backup::build_filename(
     <?php submit_button(); ?>
 </form>
 
-<p class="description fg-backup-location">
-    <?php esc_html_e('Speicherort:', 'fg-backup-pro'); ?>
-    <code><?php echo esc_html(FgBackup_Storage::get_backup_dir()); ?></code>
-</p>

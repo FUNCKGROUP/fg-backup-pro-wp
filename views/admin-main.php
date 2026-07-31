@@ -113,10 +113,14 @@ $delete_failed = isset($_GET['fg_backup_delete_failed']) ? max(0, (int) $_GET['f
         <?php wp_nonce_field('fg_backup_bulk_delete'); ?>
 
         <div class="fg-backup-bulk-actions">
+            <button type="button" class="button" id="fg-backup-bulk-validate" disabled>
+                <?php esc_html_e('Ausgewählte validieren', 'fg-backup-pro'); ?>
+            </button>
             <button type="submit" class="button" id="fg-backup-bulk-delete" disabled>
                 <?php esc_html_e('Ausgewählte löschen', 'fg-backup-pro'); ?>
             </button>
             <span id="fg-backup-selection-count" aria-live="polite"></span>
+            <span id="fg-backup-validation-result" class="fg-backup-inline-result" aria-live="polite"></span>
         </div>
 
         <table class="widefat striped fg-backup-table fg-backup-local-table">
@@ -128,7 +132,7 @@ $delete_failed = isset($_GET['fg_backup_delete_failed']) ? max(0, (int) $_GET['f
                 <th><?php esc_html_e('Datei', 'fg-backup-pro'); ?></th>
                 <th><?php esc_html_e('Inhalt', 'fg-backup-pro'); ?></th>
                 <th><?php esc_html_e('Format', 'fg-backup-pro'); ?></th>
-                <th><?php esc_html_e('Status', 'fg-backup-pro'); ?></th>
+                <th><?php esc_html_e('Validierung', 'fg-backup-pro'); ?></th>
                 <th><?php esc_html_e('Größe', 'fg-backup-pro'); ?></th>
                 <th><?php esc_html_e('Erstellt', 'fg-backup-pro'); ?></th>
                 <th><?php esc_html_e('Aktion', 'fg-backup-pro'); ?></th>
@@ -150,8 +154,15 @@ $delete_failed = isset($_GET['fg_backup_delete_failed']) ? max(0, (int) $_GET['f
                     ], admin_url('admin-post.php')),
                     'fg_backup_delete_' . $backup['name']
                 );
+                $manifest_url = wp_nonce_url(
+                    add_query_arg([
+                        'action' => 'fg_backup_manifest',
+                        'file' => $backup['name'],
+                    ], admin_url('admin-post.php')),
+                    'fg_backup_manifest_' . $backup['name']
+                );
                 ?>
-                <tr>
+                <tr data-backup-file="<?php echo esc_attr($backup['name']); ?>">
                     <th scope="row" class="check-column">
                         <input type="checkbox" class="fg-backup-select" name="backups[]" value="<?php echo esc_attr($backup['name']); ?>" aria-label="<?php echo esc_attr(sprintf(__('Backup %s auswählen', 'fg-backup-pro'), $backup['name'])); ?>">
                     </th>
@@ -163,11 +174,24 @@ $delete_failed = isset($_GET['fg_backup_delete_failed']) ? max(0, (int) $_GET['f
                     </td>
                     <td><?php echo $backup['type'] === 'full' ? esc_html__('Dateien + Datenbank', 'fg-backup-pro') : esc_html__('Datenbank', 'fg-backup-pro'); ?></td>
                     <td><?php echo esc_html($backup['format_label']); ?></td>
-                    <td><?php echo $backup['verified'] ? esc_html__('Abgeschlossen', 'fg-backup-pro') : esc_html__('Vorhanden', 'fg-backup-pro'); ?></td>
+                    <td class="fg-backup-validation-cell">
+                        <span class="fg-backup-validation-badge fg-backup-validation-badge--<?php echo esc_attr($backup['validation_status']); ?>">
+                            <?php echo esc_html(FgBackup_Validator::status_label($backup['validation_status'])); ?>
+                        </span>
+                        <?php if (!empty($backup['validated_at'])) : ?>
+                            <span class="fg-backup-validation-time"><?php echo esc_html(wp_date('d.m.Y H:i', (int) $backup['validated_at'])); ?></span>
+                        <?php endif; ?>
+                    </td>
                     <td><?php echo esc_html($backup['size']); ?></td>
                     <td><?php echo esc_html($backup['date']); ?></td>
-                    <td>
+                    <td class="fg-backup-row-actions">
                         <a href="<?php echo esc_url($download_url); ?>"><?php esc_html_e('Herunterladen', 'fg-backup-pro'); ?></a>
+                        <span aria-hidden="true"> · </span>
+                        <button type="button" class="button-link fg-backup-validate" data-file="<?php echo esc_attr($backup['name']); ?>"><?php esc_html_e('Validieren', 'fg-backup-pro'); ?></button>
+                        <span aria-hidden="true"> · </span>
+                        <button type="button" class="button-link fg-backup-report" data-file="<?php echo esc_attr($backup['name']); ?>" <?php disabled(empty($backup['manifest_exists'])); ?>><?php esc_html_e('Prüfbericht', 'fg-backup-pro'); ?></button>
+                        <span aria-hidden="true"> · </span>
+                        <a class="fg-backup-manifest-link" href="<?php echo esc_url($manifest_url); ?>" <?php echo empty($backup['manifest_exists']) ? 'hidden' : ''; ?>><?php esc_html_e('JSON', 'fg-backup-pro'); ?></a>
                         <span aria-hidden="true"> · </span>
                         <a href="<?php echo esc_url($delete_url); ?>" class="fg-backup-delete"><?php esc_html_e('Löschen', 'fg-backup-pro'); ?></a>
                     </td>
@@ -177,6 +201,15 @@ $delete_failed = isset($_GET['fg_backup_delete_failed']) ? max(0, (int) $_GET['f
         </table>
     </form>
 <?php endif; ?>
+
+
+<div id="fg-backup-report-modal" class="fg-backup-report-modal" hidden>
+    <div class="fg-backup-report-dialog" role="dialog" aria-modal="true" aria-labelledby="fg-backup-report-title">
+        <button type="button" class="fg-backup-report-close" aria-label="<?php esc_attr_e('Prüfbericht schließen', 'fg-backup-pro'); ?>">×</button>
+        <h2 id="fg-backup-report-title"><?php esc_html_e('Backup-Prüfbericht', 'fg-backup-pro'); ?></h2>
+        <div id="fg-backup-report-content"></div>
+    </div>
+</div>
 
 <?php if (!empty($history)) : ?>
     <h2><?php esc_html_e('Letzte Läufe', 'fg-backup-pro'); ?></h2>

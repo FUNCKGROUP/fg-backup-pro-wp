@@ -144,7 +144,7 @@ class FgBackup_S3 {
         $error = null;
 
         try {
-            self::request('PUT', $key, [], [], $payload, [200, 201, 204]);
+            self::request('PUT', $key, [], ['content-type' => 'text/plain; charset=utf-8'], $payload, [200, 201, 204]);
 
             $info = self::object_info($key);
             if (!$info || (int) $info['size_bytes'] !== strlen($payload)) {
@@ -207,9 +207,12 @@ class FgBackup_S3 {
         $part_size = self::part_size($total);
         $multipart = $total > self::MIN_PART_SIZE;
         $upload_id = '';
+        $content_type = self::content_type_for_file_name($file_name);
 
         if ($multipart) {
-            $response = self::request('POST', $key, ['uploads' => ''], [], '', [200]);
+            $response = self::request('POST', $key, ['uploads' => ''], [
+                'content-type' => $content_type,
+            ], '', [200]);
             $upload_id = self::xml_value($response['body'], 'UploadId');
             if ($upload_id === '') {
                 throw new RuntimeException(__('S3 hat keine Upload-ID für den Multipart-Upload geliefert.', 'fg-backup-pro'));
@@ -230,6 +233,7 @@ class FgBackup_S3 {
             'total' => $total,
             'done' => false,
             'object_uploaded' => false,
+            'content_type' => $content_type,
         ];
     }
 
@@ -258,7 +262,11 @@ class FgBackup_S3 {
                 throw new RuntimeException(__('Der S3-Upload wurde abgebrochen.', 'fg-backup-pro'));
             }
 
-            self::request('PUT', $key, [], [], $payload, [200, 201, 204], 300);
+            $headers = [];
+            if (!empty($state['content_type'])) {
+                $headers['content-type'] = (string) $state['content_type'];
+            }
+            self::request('PUT', $key, [], $headers, $payload, [200, 201, 204], 300);
             if (is_callable($progress_callback)) {
                 call_user_func($progress_callback, $total, $total);
             }
@@ -399,8 +407,6 @@ class FgBackup_S3 {
             ));
         }
 
-        $settings = self::settings();
-        self::rotate(self::resolved_remote_dir($settings), $settings['retention']);
         return self::display_path($key);
     }
 
@@ -465,6 +471,7 @@ class FgBackup_S3 {
         if ((int) $response['status'] === 404) {
             throw new RuntimeException(__('Das S3-Backup wurde nicht gefunden.', 'fg-backup-pro'));
         }
+        self::request('DELETE', $key . '.json', [], [], '', [200, 202, 204, 404]);
     }
 
     private static function part_size($total) {
@@ -572,8 +579,136 @@ class FgBackup_S3 {
             return $b_time <=> $a_time;
         });
 
-        foreach (array_slice($items, $keep) as $item) {
-            self::request('DELETE', (string) $item['key'], [], [], '', [200, 202, 204, 404]);
+        $files = [];
+        foreach ($items as $item) {
+            $name = basename((string) $item['key']);
+            $files[] = [
+                'key' => (string) $item['key'],
+                'name' => $name,
+                'full' => self::is_full_backup_name($name),
+                'valid' => self::remote_manifest_valid((string) $item['key'] . '.json'),
+            ];
+        }
+
+        $valid_full = 0;
+        $full = 0;
+        foreach ($files as $file) {
+            if (!empty($file['full'])) {
+                $full++;
+                if (!empty($file['valid'])) {
+                    $valid_full++;
+                }
+            }
+        }
+
+        foreach (array_slice($files, $keep) as $file) {
+            if (!empty($file['full'])) {
+                if (!empty($file['valid']) && $valid_full <= 1) {
+                    continue;
+                }
+                if ($valid_full === 0 && $full <= 1) {
+                    continue;
+                }
+            }
+            $deleted = self::request('DELETE', $file['key'], [], [], '', [200, 202, 204, 404]);
+            self::request('DELETE', $file['key'] . '.json', [], [], '', [200, 202, 204, 404]);
+            if ((int) $deleted['status'] !== 404 && !empty($file['full'])) {
+                $full--;
+                if (!empty($file['valid'])) {
+                    $valid_full--;
+                }
+            }
+        }
+    }
+
+    private static function is_full_backup_name($name) {
+        return self::is_backup_file_name($name) && !preg_match('/\.sql(?:\.gz|\.zip)?$/i', (string) $name);
+    }
+
+    private static function remote_manifest_valid($key) {
+        try {
+            $response = self::request('GET', $key, [], [], '', [200, 404], 30);
+            if ((int) $response['status'] !== 200) {
+                return false;
+            }
+            $data = json_decode((string) $response['body'], true);
+            return is_array($data) && !empty($data['validation']['status']) && $data['validation']['status'] === 'valid';
+        } catch (Throwable $exception) {
+            return false;
+        }
+    }
+
+    public static function read_remote_manifest($manifest_path) {
+        try {
+            $key = self::key_from_remote_path($manifest_path);
+            if ($key === '') {
+                return [];
+            }
+            $response = self::request('GET', $key, [], [], '', [200, 404], 30);
+            if ((int) $response['status'] !== 200) {
+                return [];
+            }
+            $data = json_decode((string) $response['body'], true);
+            return is_array($data) ? $data : [];
+        } catch (Throwable $exception) {
+            return [];
+        }
+    }
+
+    /**
+     * Converts a stored display path such as s3://bucket/prefix/file.json
+     * back to the object key required by the signed S3 request.
+     */
+    private static function key_from_remote_path($path) {
+        $path = trim((string) $path);
+        if ($path === '') {
+            return '';
+        }
+
+        if (stripos($path, 's3://') === 0) {
+            $parts = wp_parse_url($path);
+            $settings = self::settings();
+            if (!is_array($parts) || empty($parts['host']) || strcasecmp((string) $parts['host'], (string) $settings['bucket']) !== 0) {
+                return '';
+            }
+            $path = isset($parts['path']) ? (string) $parts['path'] : '';
+        }
+
+        $path = ltrim(str_replace('\\', '/', $path), '/');
+        if ($path === '' || strpos($path, "\0") !== false || preg_match('#(?:^|/)\.{1,2}(?:/|$)#', $path)) {
+            return '';
+        }
+
+        return $path;
+    }
+
+    private static function content_type_for_file_name($file_name) {
+        $file_name = strtolower((string) $file_name);
+        if (substr($file_name, -5) === '.json') {
+            return 'application/json; charset=utf-8';
+        }
+        if (substr($file_name, -4) === '.zip') {
+            return 'application/zip';
+        }
+        if (substr($file_name, -3) === '.gz' || substr($file_name, -4) === '.tgz') {
+            return 'application/gzip';
+        }
+        if (substr($file_name, -4) === '.sql') {
+            return 'application/sql; charset=utf-8';
+        }
+        if (substr($file_name, -4) === '.tar') {
+            return 'application/x-tar';
+        }
+
+        return 'application/octet-stream';
+    }
+
+    public static function rotate_now() {
+        try {
+            $settings = self::settings();
+            self::rotate(self::resolved_remote_dir($settings), $settings['retention']);
+        } catch (Throwable $exception) {
+            // Rotation ist best effort und darf den erfolgreichen Upload nicht entwerten.
         }
     }
 

@@ -12,8 +12,36 @@ class FgBackup_Cleanup {
             return;
         }
 
+        $valid_full = 0;
+        $full = 0;
+        foreach ($backups as $backup) {
+            if (!empty($backup['type']) && $backup['type'] === 'full') {
+                $full++;
+                if (!empty($backup['validation_status']) && $backup['validation_status'] === 'valid') {
+                    $valid_full++;
+                }
+            }
+        }
+
         foreach (array_slice($backups, $maximum) as $backup) {
-            FgBackup_Backup::delete_backup($backup['name']);
+            $is_full = !empty($backup['type']) && $backup['type'] === 'full';
+            $is_valid = !empty($backup['validation_status']) && $backup['validation_status'] === 'valid';
+
+            if ($is_full) {
+                if ($is_valid && $valid_full <= 1) {
+                    continue;
+                }
+                if ($valid_full === 0 && $full <= 1) {
+                    continue;
+                }
+            }
+
+            if (FgBackup_Backup::delete_backup($backup['name']) && $is_full) {
+                $full--;
+                if ($is_valid) {
+                    $valid_full--;
+                }
+            }
         }
     }
 

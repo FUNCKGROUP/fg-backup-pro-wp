@@ -482,3 +482,212 @@
 .fg-backup-local-table thead .check-column {
     padding-top: 8px;
 }
+
+/* 2.4.0: Validierung und Prüfberichte */
+.fg-backup-validation-cell {
+    min-width: 130px;
+}
+
+.fg-backup-validation-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 1px 8px;
+    border: 1px solid #c3c4c7;
+    border-radius: 999px;
+    background: #f6f7f7;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.fg-backup-validation-badge--valid {
+    border-color: #00a32a;
+    background: #edfaef;
+    color: #006b1b;
+}
+
+.fg-backup-validation-badge--warning {
+    border-color: #dba617;
+    background: #fff8e5;
+    color: #6e4f00;
+}
+
+.fg-backup-validation-badge--invalid {
+    border-color: #d63638;
+    background: #fcf0f1;
+    color: #8a2424;
+}
+
+.fg-backup-validation-time {
+    display: block;
+    margin-top: 4px;
+    color: #646970;
+    font-size: 11px;
+}
+
+.fg-backup-row-actions .button-link {
+    vertical-align: baseline;
+}
+
+.fg-backup-report-modal {
+    position: fixed;
+    z-index: 100100;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.fg-backup-report-modal[hidden] {
+    display: none;
+}
+
+.fg-backup-report-dialog {
+    position: relative;
+    width: min(820px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    padding: 24px;
+    background: #fff;
+    box-shadow: 0 10px 45px rgba(0, 0, 0, 0.35);
+}
+
+.fg-backup-report-dialog h2 {
+    margin-top: 0;
+    padding-right: 42px;
+}
+
+.fg-backup-report-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 34px;
+    height: 34px;
+    border: 0;
+    background: transparent;
+    color: #50575e;
+    font-size: 28px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+body.fg-backup-modal-open {
+    overflow: hidden;
+}
+
+.fg-backup-report-summary {
+    display: grid;
+    grid-template-columns: minmax(140px, 210px) 1fr;
+    margin: 0 0 22px;
+    border-top: 1px solid #dcdcde;
+}
+
+.fg-backup-report-summary dt,
+.fg-backup-report-summary dd {
+    margin: 0;
+    padding: 8px 10px;
+    border-bottom: 1px solid #dcdcde;
+}
+
+.fg-backup-report-summary dt {
+    font-weight: 600;
+    background: #f6f7f7;
+}
+
+.fg-backup-report-check {
+    margin: 0 0 10px;
+    padding: 12px 14px;
+    border-left: 4px solid #c3c4c7;
+    background: #f6f7f7;
+}
+
+.fg-backup-report-check--passed {
+    border-left-color: #00a32a;
+}
+
+.fg-backup-report-check--warning {
+    border-left-color: #dba617;
+}
+
+.fg-backup-report-check--failed {
+    border-left-color: #d63638;
+}
+
+.fg-backup-report-check-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.fg-backup-report-check p {
+    margin: 6px 0 0;
+}
+
+.fg-backup-report-error {
+    color: #b32d2e;
+}
+
+@media screen and (max-width: 782px) {
+    .fg-backup-report-modal {
+        padding: 10px;
+    }
+
+    .fg-backup-report-dialog {
+        max-height: calc(100vh - 20px);
+        padding: 18px;
+    }
+
+    .fg-backup-report-summary {
+        grid-template-columns: 1fr;
+    }
+
+    .fg-backup-report-summary dt {
+        border-bottom: 0;
+    }
+}
+
+.fg-backup-storage-custom {
+    margin-top: 10px;
+    max-width: 760px;
+}
+
+.fg-backup-storage-custom[hidden] {
+    display: none;
+}
+
+.fg-backup-storage-status {
+    max-width: 920px;
+    margin: 12px 0;
+    padding: 10px 12px;
+    border-left: 4px solid #2271b1;
+    background: #f0f6fc;
+}
+
+.fg-backup-storage-status p {
+    margin: 0 0 7px;
+}
+
+.fg-backup-storage-status p:last-child {
+    display: flex;
+    gap: 8px 22px;
+    flex-wrap: wrap;
+    margin-bottom: 0;
+}
+
+.fg-backup-storage-status code {
+    overflow-wrap: anywhere;
+}
+
+@media screen and (max-width: 782px) {
+    .fg-backup-storage-custom .large-text {
+        width: 100%;
+    }
+
+    #fg-backup-storage-test-result {
+        display: block;
+        margin: 8px 0 0;
+    }
+}

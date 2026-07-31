@@ -54,6 +54,11 @@ class FgBackup_Async {
             'file' => '',
             'size' => 0,
             'checksum' => '',
+            'manifest_path' => '',
+            'manifest_file_name' => '',
+            'validation_status' => 'unverified',
+            'validation_report' => [],
+            'validated_at' => 0,
             'estimated_required_space' => 0,
             'available_space' => 0,
             'local_verified' => false,
@@ -69,6 +74,9 @@ class FgBackup_Async {
             'remote_temp' => '',
             'remote_offset' => 0,
             'remote_total' => 0,
+            'remote_artifact_kind' => 'backup',
+            'remote_backup_path' => '',
+            'remote_manifest_path' => '',
         ];
 
         update_option(self::LOCK_OPTION, [
@@ -109,7 +117,7 @@ class FgBackup_Async {
             if (function_exists('set_time_limit')) {
                 if (!empty($job['format']) && $job['format'] === 'tgz' && $job['step'] === 'files_archive') {
                     $time_limit = 300;
-                } elseif (in_array($job['step'], ['sftp_prepare', 'sftp_upload', 'sftp_finalize', 'remote_prepare', 'remote_upload', 'remote_finalize'], true)) {
+                } elseif (in_array($job['step'], ['verify', 'sftp_prepare', 'sftp_upload', 'sftp_finalize', 'remote_prepare', 'remote_upload', 'remote_finalize'], true)) {
                     $time_limit = 3600;
                 } else {
                     $time_limit = 20;
@@ -291,6 +299,7 @@ class FgBackup_Async {
         $job['tables'] = FgBackup_Backup::get_tables();
         $job['table_index'] = 0;
         $job['row_offset'] = 0;
+        $job['database_rows'] = 0;
         $job['table_started'] = false;
         $job['scan_queue'] = [[
             'path' => $source_root,
@@ -347,6 +356,7 @@ class FgBackup_Async {
 
             $job['table_started'] = true;
             $job['row_offset'] += (int) $result['rows'];
+            $job['database_rows'] = isset($job['database_rows']) ? (int) $job['database_rows'] + (int) $result['rows'] : (int) $result['rows'];
             $display_index = min($table_count, $job['table_index'] + 1);
             $job['stage'] = __('Datenbankexport', 'fg-backup-pro');
             $job['detail'] = sprintf(
@@ -462,19 +472,12 @@ class FgBackup_Async {
         );
 
         if (!empty($result['done'])) {
-            FgBackup_Backup::finalize_archive($job['format'], $job['archive_temp'], $job['db_file'], [
-                'plugin' => 'FG Backup Pro',
-                'plugin_version' => FG_BACKUP_VERSION,
-                'created_at' => gmdate('c'),
-                'home_url' => home_url('/'),
-                'site_url' => site_url('/'),
-                'wordpress_version' => get_bloginfo('version'),
-                'php_version' => PHP_VERSION,
-                'backup_type' => $job['type'],
-                'archive_format' => $job['format'],
-                'file_count' => (int) $job['archived_files'],
-                'note' => isset($job['note']) ? (string) $job['note'] : '',
-            ]);
+            FgBackup_Backup::finalize_archive(
+                $job['format'],
+                $job['archive_temp'],
+                $job['db_file'],
+                FgBackup_Validator::embedded_manifest($job)
+            );
 
             if ($job['format'] === 'tgz') {
                 $job['progress'] = 93;
@@ -525,19 +528,43 @@ class FgBackup_Async {
     }
 
     private static function verify_and_publish(array &$job) {
-        $job['stage'] = __('Prüfung', 'fg-backup-pro');
-        $job['detail'] = __('Inhalt und Integrität werden geprüft.', 'fg-backup-pro');
-
-        if ($job['type'] === 'full') {
-            FgBackup_Backup::verify_full_archive($job['artifact_temp'], $job['format']);
-        } else {
-            FgBackup_Backup::verify_database_artifact($job['artifact_temp'], $job['format']);
-        }
+        $job['stage'] = __('Tiefenvalidierung', 'fg-backup-pro');
+        $job['detail'] = __('Archiv, SQL-Daten und Metadaten werden vollständig geprüft.', 'fg-backup-pro');
+        $job['updated_at'] = time();
+        update_option(self::option_name($job['id']), $job, false);
 
         FgBackup_Backup::move_to_final($job['artifact_temp'], $job['final_path']);
+
+        try {
+            $manifest = FgBackup_Validator::validate_and_write(
+                $job['final_path'],
+                $job['type'],
+                $job['format'],
+                array_merge($job, ['require_completion_marker' => true])
+            );
+        } catch (Throwable $exception) {
+            @unlink($job['final_path']);
+            FgBackup_Validator::delete_manifest($job['final_path']);
+            throw $exception;
+        }
+
+        $validation_status = !empty($manifest['validation']['status'])
+            ? sanitize_key((string) $manifest['validation']['status'])
+            : 'invalid';
+        if ($validation_status === 'invalid') {
+            @unlink($job['final_path']);
+            FgBackup_Validator::delete_manifest($job['final_path']);
+            throw new RuntimeException(__('Die Tiefenvalidierung des Backups ist fehlgeschlagen.', 'fg-backup-pro'));
+        }
+
         $job['file'] = basename($job['final_path']);
         $job['size'] = (int) filesize($job['final_path']);
-        $job['checksum'] = '';
+        $job['checksum'] = !empty($manifest['backup']['sha256']) ? (string) $manifest['backup']['sha256'] : '';
+        $job['manifest_path'] = FgBackup_Validator::sidecar_path($job['final_path']);
+        $job['manifest_file_name'] = basename($job['manifest_path']);
+        $job['validation_status'] = $validation_status;
+        $job['validation_report'] = isset($manifest['validation']) ? (array) $manifest['validation'] : [];
+        $job['validated_at'] = !empty($manifest['validation']['validated_at']) ? (int) strtotime((string) $manifest['validation']['validated_at']) : time();
         $job['local_verified'] = true;
 
         $job['remote_queue'] = isset($job['remote_queue']) && is_array($job['remote_queue'])
@@ -546,13 +573,14 @@ class FgBackup_Async {
         if ($job['remote_queue']) {
             $job['progress'] = 95;
             $job['stage'] = __('Remote-Uploads werden vorbereitet', 'fg-backup-pro');
-            $job['detail'] = __('Lokales Backup abgeschlossen. Remote-Ziele werden verbunden.', 'fg-backup-pro');
+            $job['detail'] = __('Validiertes Backup und JSON-Manifest werden an die Remote-Ziele übertragen.', 'fg-backup-pro');
             $job['remote_status'] = 'preparing';
+            $job['remote_artifact_kind'] = 'backup';
             $job['step'] = 'remote_prepare';
         } else {
             $job['progress'] = 98;
             $job['stage'] = __('Abschluss', 'fg-backup-pro');
-            $job['detail'] = __('Backup wird abgeschlossen.', 'fg-backup-pro');
+            $job['detail'] = __('Validiertes Backup wird abgeschlossen.', 'fg-backup-pro');
             $job['step'] = 'cleanup';
         }
     }
@@ -598,19 +626,37 @@ class FgBackup_Async {
         }
 
         $target = sanitize_key($queue[$index]);
+        $kind = !empty($job['remote_artifact_kind']) && $job['remote_artifact_kind'] === 'manifest' ? 'manifest' : 'backup';
+        $local_path = $kind === 'manifest' ? (string) $job['manifest_path'] : (string) $job['final_path'];
+        $file_name = $kind === 'manifest'
+            ? (basename(str_replace('\\', '/', (string) $job['remote_backup_path'])) . '.json')
+            : (string) $job['file'];
+        if ($local_path === '' || !is_file($local_path)) {
+            throw new RuntimeException($kind === 'manifest'
+                ? __('Das lokale JSON-Manifest fehlt.', 'fg-backup-pro')
+                : __('Die lokale Backup-Datei fehlt.', 'fg-backup-pro'));
+        }
+
         $job['remote_current'] = $target;
-        $job['remote_state'] = FgBackup_Remotes::prepare($target, $job['final_path'], $job['file']);
+        $job['remote_state'] = FgBackup_Remotes::prepare($target, $local_path, $file_name);
+        $job['remote_state']['artifact_kind'] = $kind;
         self::sync_legacy_remote_fields($job);
         $job['remote_status'] = 'uploading';
-        $job['remote_results'][$target] = [
-            'label' => FgBackup_Remotes::label($target),
-            'status' => 'uploading',
-            'path' => isset($job['remote_state']['remote_path']) ? $job['remote_state']['remote_path'] : '',
-            'error' => '',
-        ];
+        if (!isset($job['remote_results'][$target]) || !is_array($job['remote_results'][$target])) {
+            $job['remote_results'][$target] = [
+                'label' => FgBackup_Remotes::label($target),
+                'status' => 'uploading',
+                'path' => '',
+                'manifest_path' => '',
+                'error' => '',
+            ];
+        }
         $job['step'] = 'remote_upload';
         $job['progress'] = self::remote_progress($job, 0);
-        $job['stage'] = sprintf(__('%s-Upload', 'fg-backup-pro'), FgBackup_Remotes::label($target));
+        $job['stage'] = sprintf(
+            $kind === 'manifest' ? __('%s-JSON-Upload', 'fg-backup-pro') : __('%s-Upload', 'fg-backup-pro'),
+            FgBackup_Remotes::label($target)
+        );
         $job['detail'] = !empty($job['remote_state']['remote_path'])
             ? sprintf(__('Ziel: %s', 'fg-backup-pro'), $job['remote_state']['remote_path'])
             : __('Upload wird vorbereitet.', 'fg-backup-pro');
@@ -623,17 +669,22 @@ class FgBackup_Async {
         }
 
         $state = isset($job['remote_state']) && is_array($job['remote_state']) ? $job['remote_state'] : [];
+        $kind = !empty($job['remote_artifact_kind']) && $job['remote_artifact_kind'] === 'manifest' ? 'manifest' : 'backup';
+        $local_path = $kind === 'manifest' ? (string) $job['manifest_path'] : (string) $job['final_path'];
         $job['remote_state'] = FgBackup_Remotes::upload(
             $target,
-            $job['final_path'],
+            $local_path,
             $state,
             static function () use ($job) {
                 return self::is_cancel_requested($job['id'], true);
             },
-            static function ($uploaded, $total) use (&$job, $target) {
+            static function ($uploaded, $total) use (&$job, $target, $kind) {
                 $ratio = $total > 0 ? min(1, max(0, $uploaded / $total)) : 0;
                 $job['progress'] = self::remote_progress($job, $ratio);
-                $job['stage'] = sprintf(__('%s-Upload', 'fg-backup-pro'), FgBackup_Remotes::label($target));
+                $job['stage'] = sprintf(
+                    $kind === 'manifest' ? __('%s-JSON-Upload', 'fg-backup-pro') : __('%s-Upload', 'fg-backup-pro'),
+                    FgBackup_Remotes::label($target)
+                );
                 $job['detail'] = sprintf(
                     __('%1$s von %2$s hochgeladen', 'fg-backup-pro'),
                     size_format((int) $uploaded, 1),
@@ -649,7 +700,10 @@ class FgBackup_Async {
         $total = isset($job['remote_state']['total']) ? max(1, (int) $job['remote_state']['total']) : 1;
         $ratio = min(1, $offset / $total);
         $job['progress'] = self::remote_progress($job, $ratio);
-        $job['stage'] = sprintf(__('%s-Upload', 'fg-backup-pro'), FgBackup_Remotes::label($target));
+        $job['stage'] = sprintf(
+            $kind === 'manifest' ? __('%s-JSON-Upload', 'fg-backup-pro') : __('%s-Upload', 'fg-backup-pro'),
+            FgBackup_Remotes::label($target)
+        );
         $job['detail'] = sprintf(
             __('%1$s von %2$s hochgeladen', 'fg-backup-pro'),
             size_format($offset, 1),
@@ -668,17 +722,42 @@ class FgBackup_Async {
         if ($target === '') {
             throw new RuntimeException(__('Das aktuelle Remote-Ziel fehlt.', 'fg-backup-pro'));
         }
+        $kind = !empty($job['remote_artifact_kind']) && $job['remote_artifact_kind'] === 'manifest' ? 'manifest' : 'backup';
         $path = FgBackup_Remotes::finalize($target, isset($job['remote_state']) ? (array) $job['remote_state'] : []);
+
+        if ($kind === 'backup') {
+            $job['remote_backup_path'] = (string) $path;
+            $job['remote_results'][$target] = [
+                'label' => FgBackup_Remotes::label($target),
+                'status' => 'uploading',
+                'path' => (string) $path,
+                'manifest_path' => '',
+                'error' => '',
+            ];
+            $job['remote_artifact_kind'] = 'manifest';
+            $job['remote_state'] = [];
+            $job['remote_temp'] = '';
+            $job['remote_offset'] = 0;
+            $job['remote_total'] = 0;
+            $job['step'] = 'remote_prepare';
+            $job['stage'] = sprintf(__('%s-Manifest wird vorbereitet', 'fg-backup-pro'), FgBackup_Remotes::label($target));
+            $job['detail'] = __('Backup hochgeladen. Das JSON-Manifest folgt.', 'fg-backup-pro');
+            return;
+        }
+
+        $job['remote_manifest_path'] = (string) $path;
         $job['remote_results'][$target] = [
             'label' => FgBackup_Remotes::label($target),
             'status' => 'completed',
-            'path' => (string) $path,
+            'path' => (string) $job['remote_backup_path'],
+            'manifest_path' => (string) $path,
             'error' => '',
         ];
-        $job['remote_path'] = (string) $path;
+        $job['remote_path'] = (string) $job['remote_backup_path'];
         $job['remote_status'] = 'completed';
+        FgBackup_Remotes::rotate($target);
         $job['stage'] = sprintf(__('%s abgeschlossen', 'fg-backup-pro'), FgBackup_Remotes::label($target));
-        $job['detail'] = (string) $path;
+        $job['detail'] = (string) $job['remote_backup_path'];
         self::advance_remote($job);
     }
 
@@ -708,6 +787,9 @@ class FgBackup_Async {
         $job['remote_temp'] = '';
         $job['remote_offset'] = 0;
         $job['remote_total'] = 0;
+        $job['remote_artifact_kind'] = 'backup';
+        $job['remote_backup_path'] = '';
+        $job['remote_manifest_path'] = '';
         $queue = isset($job['remote_queue']) && is_array($job['remote_queue']) ? array_values($job['remote_queue']) : [];
         if (isset($queue[$job['remote_index']])) {
             $next = sanitize_key($queue[$job['remote_index']]);
@@ -732,6 +814,9 @@ class FgBackup_Async {
             if (!@unlink($job['final_path'])) {
                 $job['remote_errors']['local'] = __('Alle Remote-Uploads waren erfolgreich, die lokale Backup-Datei konnte aber nicht gelöscht werden.', 'fg-backup-pro');
             } else {
+                if (!empty($job['manifest_path']) && is_file($job['manifest_path'])) {
+                    @unlink($job['manifest_path']);
+                }
                 $job['local_deleted'] = true;
                 $job['file'] = '';
             }
@@ -899,6 +984,7 @@ class FgBackup_Async {
 
         if (empty($job['local_verified']) && !empty($job['final_path']) && is_file($job['final_path'])) {
             @unlink($job['final_path']);
+            FgBackup_Validator::delete_manifest($job['final_path']);
         }
 
         $job['status'] = 'canceled';
@@ -964,6 +1050,9 @@ class FgBackup_Async {
             'file' => isset($job['file']) ? $job['file'] : '',
             'size' => isset($job['size']) ? (int) $job['size'] : 0,
             'checksum' => isset($job['checksum']) ? $job['checksum'] : '',
+            'manifest_file' => isset($job['manifest_file_name']) ? $job['manifest_file_name'] : '',
+            'validation_status' => isset($job['validation_status']) ? $job['validation_status'] : 'unverified',
+            'validated_at' => isset($job['validated_at']) ? (int) $job['validated_at'] : 0,
             'error' => isset($job['error']) ? $job['error'] : '',
             'note' => isset($job['note']) ? $job['note'] : '',
             'remote_status' => isset($job['remote_status']) ? $job['remote_status'] : 'disabled',

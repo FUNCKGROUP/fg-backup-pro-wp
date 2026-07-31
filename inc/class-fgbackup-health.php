@@ -7,7 +7,7 @@ class FgBackup_Health {
     const CRON_HOOK = 'fg_backup_health_check';
     const REPORT_OPTION = 'fg_backup_health_report';
     const LAST_MAIL_OPTION = 'fg_backup_health_last_mail';
-    const REPORT_VERSION = 2;
+    const REPORT_VERSION = 3;
 
     public static function init() {
         add_action(self::CRON_HOOK, [__CLASS__, 'run_scheduled']);
@@ -91,10 +91,16 @@ class FgBackup_Health {
             return !empty($entry['finished_at']);
         });
         $latest_usable = self::first_entry($history, static function ($entry) {
-            return isset($entry['status']) && in_array($entry['status'], ['completed', 'completed_with_errors'], true);
+            return isset($entry['status'])
+                && in_array($entry['status'], ['completed', 'completed_with_errors'], true)
+                && !empty($entry['validation_status'])
+                && $entry['validation_status'] === 'valid';
         });
         $latest_clean = self::first_entry($history, static function ($entry) {
-            return isset($entry['status']) && $entry['status'] === 'completed';
+            return isset($entry['status'])
+                && $entry['status'] === 'completed'
+                && !empty($entry['validation_status'])
+                && $entry['validation_status'] === 'valid';
         });
 
         $checks['backup'] = self::backup_check($latest_result, $latest_usable, $latest_clean, $now);
@@ -275,29 +281,47 @@ class FgBackup_Health {
 
         if ($local_backups) {
             $latest_local = reset($local_backups);
-            $file = !empty($latest_local['name']) ? sanitize_file_name((string) $latest_local['name']) : '';
-            $size = isset($latest_local['size_raw']) ? (int) $latest_local['size_raw'] : 0;
-
-            if ($file === '' || $size <= 0) {
-                return self::check('critical', __('Lokale Sicherung', 'fg-backup-pro'), __('Die neueste lokale Backup-Datei ist leer oder nicht lesbar.', 'fg-backup-pro'));
+            $latest_valid = false;
+            foreach ($local_backups as $candidate) {
+                if (!empty($candidate['validation_status']) && $candidate['validation_status'] === 'valid') {
+                    $latest_valid = $candidate;
+                    break;
+                }
             }
 
-            return self::check(
-                'healthy',
-                __('Lokale Sicherung', 'fg-backup-pro'),
-                self::safe_format(__('Neueste lokale Sicherung: %1$s (%2$s).', 'fg-backup-pro'), $file, size_format($size, 2))
-            );
+            if (!$latest_valid) {
+                $latest_name = !empty($latest_local['name']) ? (string) $latest_local['name'] : __('unbekannt', 'fg-backup-pro');
+                return self::check(
+                    'warning',
+                    __('Lokale Sicherung', 'fg-backup-pro'),
+                    self::safe_format(__('Lokale Backups sind vorhanden, aber keines wurde erfolgreich tiefenvalidiert. Neueste Datei: %s.', 'fg-backup-pro'), $latest_name)
+                );
+            }
+
+            $file = !empty($latest_valid['name']) ? (string) $latest_valid['name'] : '';
+            $size = isset($latest_valid['size_raw']) ? (int) $latest_valid['size_raw'] : 0;
+            if ($file === '' || $size <= 0) {
+                return self::check('critical', __('Lokale Sicherung', 'fg-backup-pro'), __('Die neueste gültige lokale Backup-Datei ist leer oder nicht lesbar.', 'fg-backup-pro'));
+            }
+
+            $detail = self::safe_format(__('Neueste gültige lokale Sicherung: %1$s (%2$s).', 'fg-backup-pro'), $file, size_format($size, 2));
+            if (!empty($latest_local['name']) && $latest_local['name'] !== $file) {
+                $detail .= ' ' . __('Ein neueres Backup ist noch nicht gültig validiert.', 'fg-backup-pro');
+                return self::check('warning', __('Lokale Sicherung', 'fg-backup-pro'), $detail);
+            }
+
+            return self::check('healthy', __('Lokale Sicherung', 'fg-backup-pro'), $detail);
         }
 
         if (!$latest_usable) {
-            return self::check('unknown', __('Lokale Sicherung', 'fg-backup-pro'), __('Noch keine lokale Sicherung vorhanden.', 'fg-backup-pro'));
+            return self::check('unknown', __('Lokale Sicherung', 'fg-backup-pro'), __('Noch keine gültige lokale Sicherung vorhanden.', 'fg-backup-pro'));
         }
 
         if (!empty($latest_usable['local_deleted'])) {
-            return self::check('info', __('Lokale Sicherung', 'fg-backup-pro'), __('Nach erfolgreichen Remote-Uploads wie eingestellt gelöscht.', 'fg-backup-pro'));
+            return self::check('info', __('Lokale Sicherung', 'fg-backup-pro'), __('Nach erfolgreichen Remote-Uploads wie eingestellt gelöscht; die Sicherung war zuvor gültig validiert.', 'fg-backup-pro'));
         }
 
-        return self::check('warning', __('Lokale Sicherung', 'fg-backup-pro'), __('Es wurde keine lokale Backup-Datei gefunden.', 'fg-backup-pro'));
+        return self::check('warning', __('Lokale Sicherung', 'fg-backup-pro'), __('Es wurde keine gültige lokale Backup-Datei gefunden.', 'fg-backup-pro'));
     }
 
     private static function active_job_check($now) {
@@ -345,11 +369,14 @@ class FgBackup_Health {
 
         $entry = self::first_entry($history, static function ($item) use ($target) {
             return !empty($item['remote_results'][$target]['status'])
-                && $item['remote_results'][$target]['status'] === 'completed';
+                && $item['remote_results'][$target]['status'] === 'completed'
+                && !empty($item['validation_status'])
+                && $item['validation_status'] === 'valid'
+                && !empty($item['remote_results'][$target]['manifest_path']);
         });
 
         if (!$entry) {
-            return self::check('warning', $label, self::safe_format(__('Für %s wurde noch kein erfolgreicher Upload protokolliert.', 'fg-backup-pro'), $label));
+            return self::check('warning', $label, self::safe_format(__('Für %s wurde noch kein vollständig validierter Upload mit JSON-Manifest protokolliert.', 'fg-backup-pro'), $label));
         }
 
         $result = isset($entry['remote_results'][$target]) ? (array) $entry['remote_results'][$target] : [];
@@ -398,10 +425,32 @@ class FgBackup_Health {
                     );
                 }
 
+                $manifest_path = !empty($result['manifest_path']) ? (string) $result['manifest_path'] : '';
+                $remote_manifest = $manifest_path !== '' ? FgBackup_Remotes::read_manifest($target, $manifest_path) : [];
+                if (!$remote_manifest) {
+                    return self::check('critical', $label, __('Das Remote-Backup ist vorhanden, aber das zugehörige JSON-Manifest fehlt oder ist nicht lesbar.', 'fg-backup-pro'));
+                }
+                if (empty($remote_manifest['validation']['status']) || $remote_manifest['validation']['status'] !== 'valid') {
+                    return self::check('critical', $label, __('Das Remote-JSON bestätigt keine gültige Sicherung.', 'fg-backup-pro'));
+                }
+                if (!empty($remote_manifest['backup']['filename'])) {
+                    $manifest_filename = (string) $remote_manifest['backup']['filename'];
+                    $local_filename = !empty($entry['file']) ? basename((string) $entry['file']) : '';
+                    if ($manifest_filename !== $file_name && ($local_filename === '' || $manifest_filename !== $local_filename)) {
+                        return self::check('critical', $label, __('Der Dateiname im Remote-JSON stimmt weder mit der lokalen noch mit der entfernten Backup-Datei überein.', 'fg-backup-pro'));
+                    }
+                }
+                if (!empty($remote_manifest['backup']['size']) && $actual > 0 && (int) $remote_manifest['backup']['size'] !== $actual) {
+                    return self::check('critical', $label, __('Die Dateigröße im Remote-JSON stimmt nicht mit der Remote-Datei überein.', 'fg-backup-pro'));
+                }
+                if (!empty($entry['checksum']) && !empty($remote_manifest['backup']['sha256']) && !hash_equals((string) $entry['checksum'], (string) $remote_manifest['backup']['sha256'])) {
+                    return self::check('critical', $label, __('Die Prüfsumme im Remote-JSON stimmt nicht mit dem lokalen Prüfbericht überein.', 'fg-backup-pro'));
+                }
+
                 return self::check(
                     'healthy',
                     $label,
-                    self::safe_format(__('%1$s ist remote vorhanden (%2$s).', 'fg-backup-pro'), $file_name, $actual > 0 ? size_format($actual, 2) : __('Größe unbekannt', 'fg-backup-pro'))
+                    self::safe_format(__('%1$s und das gültige JSON-Manifest sind remote vorhanden (%2$s).', 'fg-backup-pro'), $file_name, $actual > 0 ? size_format($actual, 2) : __('Größe unbekannt', 'fg-backup-pro'))
                 );
             }
 

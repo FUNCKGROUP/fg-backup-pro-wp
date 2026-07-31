@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.4.0 – 31.07.2026
+
+- versioniertes JSON-Manifest als gleichnamige Sidecar-Datei neben jeder Sicherung
+- Manifest wird gemeinsam mit dem Backup auf SFTP, WebDAV, Dropbox und S3 übertragen
+- eingebettetes `fg-backup.json` in vollständigen ZIP- und TGZ-Backups
+- automatische Tiefenvalidierung neuer Backups vor der Remote-Verteilung
+- vollständiges Lesen aller Archivdateien sowie Prüfung von ZIP-/TGZ-Struktur und sicheren relativen Pfaden
+- Kontrolle auf enthaltene Datenbank und gültiges eingebettetes Manifest
+- SHA-256-Prüfsumme und unveränderliche ursprüngliche Dateigröße zur Erkennung späterer Manipulationen
+- beobachtete Größe und Prüfsumme werden bei jeder erneuten Validierung getrennt protokolliert
+- eindeutige SQL-Abschlussmarkierung für neue Datenbankexporte
+- Legacy-SQL-Backups ohne Abschlussmarkierung werden bei vollständiger Lesbarkeit als Warnung bewertet
+- Tabellen- und Zeilenzählung sowie Prüfung des SQL-Kopfes und des vollständigen Datenstroms
+- Validierungsstatus „Gültig“, „Warnung“, „Ungültig“ oder „Nicht geprüft“ in der lokalen Backup-Liste
+- manuelle Einzel- und Mehrfachvalidierung bestehender Backups
+- detaillierter Prüfbericht als Modal und geschützter Download der JSON-Metadaten
+- Gesundheitsprüfung verwendet ausschließlich gültig validierte Sicherungen
+- Remote-Gesundheitsprüfung kontrolliert zusätzlich das vorhandene und gültige JSON-Manifest
+- lokales und entferntes Löschen entfernt jeweils auch das zugehörige Manifest
+- lokale und Remote-Rotation schützen das letzte gültige vollständige Backup
+- manuell validierte Legacy-Backups ohne bisherigen Lauf werden für die Gesundheitsprüfung nachgetragen
+- JSON-Sidecars werden von SFTP, WebDAV und Dropbox als gültige Begleitdateien akzeptiert und gemeinsam mit dem Backup verwaltet
+- S3-Gesundheitsprüfung normalisiert gespeicherte `s3://`-Anzeigepfade korrekt auf den tatsächlichen Objektschlüssel
+- JSON-Manifeste erhalten bei S3 den Content-Type `application/json; charset=utf-8`
+- E-Mail-Benachrichtigungen formatieren Remote-Ziele übersichtlich jeweils in einer eigenen Zeile
+- lokaler Speicherort wahlweise unter `wp-content/.fg-private`, automatisch außerhalb des Webroots oder als benutzerdefinierter absoluter Pfad
+- automatischer websitespezifischer Speicherpfad oberhalb des erkannten Webroots mit sicherem Fallback auf `wp-content/.fg-private`
+- Prüfung des lokalen Speicherorts durch Verzeichnisanlage sowie Schreiben, Zurücklesen und Löschen einer Testdatei
+- Anzeige des tatsächlich aktiven Backup-Ordners, freien Speicherplatzes, Schreibstatus und Lage außerhalb des Webroots
+- eigener verwalteter Unterordner `fg-backup-pro` mit Schutzdateien und Storage-Markierung
+- aktiver, benutzerdefinierter und standardmäßiger `.fg-private`-Pfad werden zuverlässig vom vollständigen Backup ausgeschlossen
+- benutzerdefinierter absoluter Speicherpfad wird aus Datenbankexporten entfernt
+- vorhandene Backups werden bei einem Wechsel des Speicherorts bewusst nicht automatisch verschoben
+
 ## 2.3.0 – 30.07.2026
 
 - neues Remote-Ziel für Amazon S3 und S3-kompatiblen Object Storage

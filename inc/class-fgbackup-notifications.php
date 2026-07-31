@@ -37,9 +37,9 @@ class FgBackup_Notifications {
         if (!empty($job['local_verified']) && !empty($job['file'])) {
             $body .= "\nLokales Backup vorhanden: " . $job['file'];
         }
-        $remote = FgBackup_Remotes::summarize(isset($job['remote_results']) ? (array) $job['remote_results'] : []);
+        $remote = self::remote_lines(isset($job['remote_results']) ? (array) $job['remote_results'] : []);
         if ($remote !== '') {
-            $body .= "\nRemote-Ziele: " . $remote;
+            $body .= "\n\nRemote-Ziele:\n" . $remote;
         }
         self::send($subject, $body);
     }
@@ -143,6 +143,33 @@ class FgBackup_Notifications {
         }
     }
 
+    private static function remote_lines(array $results) {
+        $lines = [];
+
+        foreach ($results as $id => $result) {
+            $label = FgBackup_Remotes::label($id);
+            $status = isset($result['status']) ? (string) $result['status'] : '';
+
+            if ($status === 'completed') {
+                $message = !empty($result['path'])
+                    ? (string) $result['path']
+                    : __('erfolgreich', 'fg-backup-pro');
+            } elseif ($status === 'failed') {
+                $message = !empty($result['error'])
+                    ? (string) $result['error']
+                    : __('fehlgeschlagen', 'fg-backup-pro');
+            } elseif ($status === 'canceled') {
+                $message = __('abgebrochen', 'fg-backup-pro');
+            } else {
+                continue;
+            }
+
+            $lines[] = '- ' . $label . ': ' . $message;
+        }
+
+        return implode("\n", $lines);
+    }
+
     private static function send($subject, $body) {
         $recipient = self::recipient();
         if ($recipient === '') {
@@ -156,7 +183,7 @@ class FgBackup_Notifications {
             ? $job['file']
             : (!empty($job['local_deleted']) ? __('Nach erfolgreichen Remote-Uploads gelöscht', 'fg-backup-pro') : '-');
         $body = self::safe_format(
-            "Website: %1$s\nURL: %2$s\n\n%3$s\n\nLokale Datei: %4$s\nGröße: %5$s\nDatum: %6$s",
+            "Website: %s\nURL: %s\n\n%s\n\nLokale Datei: %s\nGröße: %s\nDatum: %s",
             wp_specialchars_decode((string) get_bloginfo('name'), ENT_QUOTES),
             home_url('/'),
             $intro,
@@ -164,12 +191,12 @@ class FgBackup_Notifications {
             isset($job['size']) ? size_format((int) $job['size'], 2) : '-',
             wp_date('d.m.Y H:i', isset($job['finished_at']) ? (int) $job['finished_at'] : time())
         );
-        $remote = FgBackup_Remotes::summarize(isset($job['remote_results']) ? (array) $job['remote_results'] : []);
+        $remote = self::remote_lines(isset($job['remote_results']) ? (array) $job['remote_results'] : []);
         if ($remote !== '') {
-            $body .= "\nRemote-Ziele: " . $remote;
+            $body .= "\n\nRemote-Ziele:\n" . $remote;
         }
         if (!empty($job['note'])) {
-            $body .= "\nNotiz: " . $job['note'];
+            $body .= "\n\nNotiz: " . $job['note'];
         }
         return $body;
     }

@@ -303,7 +303,6 @@ class FgBackup_Sftp {
             throw new RuntimeException(__('Die finalisierte SFTP-Datei konnte nicht bestätigt werden.', 'fg-backup-pro'));
         }
 
-        self::rotate($sftp, dirname($remote_path), self::settings()['retention']);
         return true;
     }
 
@@ -378,6 +377,10 @@ class FgBackup_Sftp {
         if (!$sftp->delete($path)) {
             throw new RuntimeException(__('Das Remote-Backup konnte nicht gelöscht werden.', 'fg-backup-pro'));
         }
+        $manifest_path = $path . '.json';
+        if ($sftp->file_exists($manifest_path)) {
+            $sftp->delete($manifest_path);
+        }
 
         return true;
     }
@@ -424,8 +427,8 @@ class FgBackup_Sftp {
 
     private static function unique_remote_path(SFTP $sftp, $directory, $file_name) {
         $file_name = basename(str_replace('\\', '/', (string) $file_name));
-        if (!self::is_backup_file_name($file_name)) {
-            throw new RuntimeException(__('Der Dateiname des Backups ist für SFTP ungültig.', 'fg-backup-pro'));
+        if (!self::is_remote_artifact_file_name($file_name)) {
+            throw new RuntimeException(__('Der Dateiname der Remote-Datei ist für SFTP ungültig.', 'fg-backup-pro'));
         }
 
         $candidate = rtrim($directory, '/') . '/' . $file_name;
@@ -435,7 +438,7 @@ class FgBackup_Sftp {
 
         $extension = '';
         $base = $file_name;
-        foreach (['.sql.zip', '.sql.gz', '.tar.gz', '.tgz', '.zip', '.sql'] as $known) {
+        foreach (['.sql.zip.json', '.sql.gz.json', '.tar.gz.json', '.tgz.json', '.zip.json', '.sql.json', '.sql.zip', '.sql.gz', '.tar.gz', '.tgz', '.zip', '.sql'] as $known) {
             if (substr(strtolower($file_name), -strlen($known)) === $known) {
                 $extension = substr($file_name, -strlen($known));
                 $base = substr($file_name, 0, -strlen($known));
@@ -461,6 +464,18 @@ class FgBackup_Sftp {
         return (bool) preg_match('/(?:\.sql\.zip|\.sql\.gz|\.tar\.gz|\.tgz|\.zip|\.sql)$/i', $name);
     }
 
+    private static function is_remote_artifact_file_name($name) {
+        if (self::is_backup_file_name($name)) {
+            return true;
+        }
+
+        if (!is_string($name) || substr(strtolower($name), -5) !== '.json') {
+            return false;
+        }
+
+        return self::is_backup_file_name(substr($name, 0, -5));
+    }
+
     private static function rotate(SFTP $sftp, $directory, $keep) {
         $list = $sftp->rawlist($directory);
         if (!is_array($list)) {
@@ -472,9 +487,13 @@ class FgBackup_Sftp {
             if (!self::is_backup_file_name($name)) {
                 continue;
             }
+            $path = rtrim($directory, '/') . '/' . $name;
             $files[] = [
                 'name' => $name,
+                'path' => $path,
                 'mtime' => is_array($info) && isset($info['mtime']) ? (int) $info['mtime'] : 0,
+                'full' => self::is_full_backup_name($name),
+                'valid' => self::remote_manifest_valid($sftp, $path . '.json'),
             ];
         }
 
@@ -482,8 +501,80 @@ class FgBackup_Sftp {
             return $right['mtime'] <=> $left['mtime'];
         });
 
+        $valid_full = 0;
+        $full = 0;
+        foreach ($files as $file) {
+            if (!empty($file['full'])) {
+                $full++;
+                if (!empty($file['valid'])) {
+                    $valid_full++;
+                }
+            }
+        }
+
         foreach (array_slice($files, max(1, (int) $keep)) as $file) {
-            $sftp->delete(rtrim($directory, '/') . '/' . $file['name']);
+            if (!empty($file['full'])) {
+                if (!empty($file['valid']) && $valid_full <= 1) {
+                    continue;
+                }
+                if ($valid_full === 0 && $full <= 1) {
+                    continue;
+                }
+            }
+
+            if ($sftp->delete($file['path'])) {
+                $manifest_path = $file['path'] . '.json';
+                if ($sftp->file_exists($manifest_path)) {
+                    $sftp->delete($manifest_path);
+                }
+                if (!empty($file['full'])) {
+                    $full--;
+                    if (!empty($file['valid'])) {
+                        $valid_full--;
+                    }
+                }
+            }
+        }
+    }
+
+    private static function is_full_backup_name($name) {
+        return self::is_backup_file_name($name) && !preg_match('/\.sql(?:\.gz|\.zip)?$/i', (string) $name);
+    }
+
+    private static function remote_manifest_valid(SFTP $sftp, $manifest_path) {
+        if (!$sftp->file_exists($manifest_path)) {
+            return false;
+        }
+        $json = $sftp->get($manifest_path);
+        if (!is_string($json) || $json === '') {
+            return false;
+        }
+        $data = json_decode($json, true);
+        return is_array($data) && !empty($data['validation']['status']) && $data['validation']['status'] === 'valid';
+    }
+
+    public static function read_remote_manifest($manifest_path) {
+        try {
+            $settings = self::settings();
+            $sftp = self::connect($settings);
+            $json = $sftp->get((string) $manifest_path);
+            if (!is_string($json) || $json === '') {
+                return [];
+            }
+            $data = json_decode($json, true);
+            return is_array($data) ? $data : [];
+        } catch (Throwable $exception) {
+            return [];
+        }
+    }
+
+    public static function rotate_now() {
+        try {
+            $settings = self::settings();
+            $sftp = self::connect($settings);
+            self::rotate($sftp, self::resolved_remote_dir($settings), $settings['retention']);
+        } catch (Throwable $exception) {
+            // Rotation ist best effort und darf den erfolgreichen Upload nicht entwerten.
         }
     }
 

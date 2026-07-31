@@ -1,8 +1,8 @@
 # FG Backup Pro
 
-FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen im geschützten FUNCKGROUP-Verzeichnis und überträgt sie optional zu mehreren Remote-Zielen. Die Verwaltung erfolgt als eigener Eintrag **FG Backup Pro** innerhalb von FG Core.
+FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen an einem geschützten, frei wählbaren lokalen Speicherort und überträgt sie optional zu mehreren Remote-Zielen. Die Verwaltung erfolgt als eigener Eintrag **FG Backup Pro** innerhalb von FG Core.
 
-## Version 2.3.0
+## Version 2.4.0
 
 - vollständige Backups als ZIP oder TGZ
 - Datenbank-Backups als SQL, SQL.GZ oder SQL.ZIP
@@ -32,12 +32,24 @@ FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen im geschützt
 - Mehrfachauswahl und gemeinsames Löschen lokaler Backups
 - direkte Aktualisierung der Gesundheitsanzeige über „Jetzt prüfen“ ohne Seitenreload
 - robuste Erkennung der neuesten tatsächlich vorhandenen lokalen Sicherung
+- JSON-Manifest als gleichnamige `.json`-Datei neben jedem lokalen und entfernten Backup
+- eingebettetes `fg-backup.json` in vollständigen ZIP- und TGZ-Sicherungen
+- automatische Tiefenvalidierung neuer Sicherungen vor jedem Remote-Upload
+- vollständiges Lesen aller Archiveinträge einschließlich Pfad-, Struktur- und SQL-Prüfung
+- dauerhafte SHA-256-Prüfsumme zur Erkennung nachträglicher Veränderungen
+- eindeutige SQL-Abschlussmarkierung für Exporte ab Version 2.4.0
+- manuelle Einzel- und Mehrfachvalidierung bestehender Sicherungen
+- detaillierter Prüfbericht und geschützter JSON-Download im WordPress-Admin
+- Remote-Gesundheitsprüfung kontrolliert zusätzlich das zugehörige JSON-Manifest
+- lokale und entfernte Rotation schützt das letzte gültige vollständige Backup
+- lokaler Speicherort wahlweise unter `wp-content/.fg-private`, automatisch außerhalb des Webroots oder als benutzerdefinierter absoluter Pfad
+- Schreib-, Lese- und Löschtest des lokalen Speicherorts mit Anzeige von freiem Speicher und Webroot-Status
 
 ## Voraussetzungen
 
 - WordPress 5.8 oder neuer
 - PHP 7.4 oder neuer
-- Schreibzugriff auf `wp-content/.fg-private/`
+- Schreibzugriff auf den gewählten lokalen Backup-Pfad; als sicherer Standard steht `wp-content/.fg-private/` zur Verfügung
 - `ZipArchive` für ZIP und SQL.ZIP
 - `PharData` und GZIP/Zlib für TGZ
 - GZIP/Zlib für SQL.GZ
@@ -53,7 +65,7 @@ Eine installierbare Repository-Version enthält `vendor/`, `composer.lock` und d
 2. Plugin aktivieren.
 3. **FUNCKGROUP → FG Backup Pro** öffnen.
 
-Backups unter `wp-content/.fg-private/fg-backup-pro/` bleiben beim Austausch des Plugin-Ordners erhalten.
+Backups am gewählten lokalen Speicherort bleiben beim Austausch des Plugin-Ordners erhalten. Bei einem Wechsel des Speicherorts werden vorhandene Sicherungen bewusst nicht automatisch verschoben.
 
 ## Composer und Entwicklung
 
@@ -72,6 +84,32 @@ composer.lock
 vendor/
 includes/fg-core/
 ```
+
+
+## JSON-Manifest und Validierung
+
+Zu jeder Sicherung legt FG Backup Pro eine gleichnamige JSON-Datei an:
+
+```text
+20260730-1407.example-de.full.zip
+20260730-1407.example-de.full.zip.json
+```
+
+Das versionierte Manifest enthält ausschließlich technische Backup-Metadaten, darunter Typ, Format, Erstellungszeit, Größe, SHA-256-Prüfsumme, Dateianzahl, WordPress-/PHP-/Datenbankversion, Tabellen- und Zeilenzahl sowie den detaillierten Prüfbericht. Passwörter, Tokens, private Schlüssel, Datenbankzugänge und absolute Serverpfade werden nicht gespeichert.
+
+Neue Backups werden vor dem Remote-Upload vollständig validiert. Dabei werden unter anderem geprüft:
+
+- Lesbarkeit und tatsächliches Dateiformat
+- vollständige Archivstruktur und sichere relative Pfade
+- Lesbarkeit sämtlicher ZIP-/TGZ-Einträge
+- eingebettetes `fg-backup.json` und enthaltene Datenbank
+- SQL-Kopf, Tabellenmarkierungen und Abschlussmarkierung
+- Dateianzahl im Archiv gegenüber dem eingebetteten Manifest
+- unveränderte Größe und SHA-256-Prüfsumme bei späteren Prüfungen
+
+Bestehende Sicherungen aus älteren Versionen können manuell validiert werden. Fehlt nur die ab 2.4.0 eingeführte SQL-Abschlussmarkierung, wird ein vollständig lesbares Legacy-Backup als Warnung statt automatisch als beschädigt bewertet.
+
+Das externe JSON wird gemeinsam mit der Backup-Datei zu SFTP, WebDAV, Dropbox und S3 hochgeladen. Die Gesundheitsprüfung kontrolliert neben der Remote-Datei auch dieses Manifest. Die vollständige Remote-Datei wird dabei nicht erneut heruntergeladen; geprüft werden Vorhandensein, Dateigröße und die Übereinstimmung der Manifest-Metadaten.
 
 ## Backup-Gesundheit
 
@@ -247,7 +285,17 @@ Platzhalter:
 
 Die Dateiendung wird automatisch ergänzt.
 
-## Speicherort
+## Lokaler Speicherort
+
+Im Tab **Einstellungen** stehen drei Modi zur Verfügung:
+
+```text
+wp-content/.fg-private verwenden
+Automatisch außerhalb des Webroots
+Benutzerdefinierter Pfad
+```
+
+Der kompatible Standard bleibt:
 
 ```text
 wp-content/.fg-private/fg-backup-pro/
@@ -255,7 +303,27 @@ wp-content/.fg-private/fg-backup-pro/
 └── temporary/
 ```
 
-FG Backup Pro ergänzt fehlende Schutzdateien, überschreibt aber keine vorhandenen Schutzdateien im gemeinsamen Verzeichnis `.fg-private`.
+Der automatische Modus versucht einen beschreibbaren, websitespezifischen Ordner oberhalb des erkannten Webroots. Ist dies auf dem Hosting nicht möglich, verwendet FG Backup Pro weiterhin sicher den Standardpfad unter `wp-content/.fg-private` und zeigt den Fallback im Admin an.
+
+Bei einem benutzerdefinierten Speicherort wird ein absoluter lokaler Basispfad angegeben, zum Beispiel:
+
+```text
+/var/www/vhosts/example.de/private
+```
+
+FG Backup Pro verwaltet darin ausschließlich:
+
+```text
+/var/www/vhosts/example.de/private/fg-backup-pro/
+├── backups/
+└── temporary/
+```
+
+Über **Speicherort prüfen** werden Verzeichnisanlage, Schreiben, vollständiges Zurücklesen und Löschen einer Testdatei geprüft. Zusätzlich zeigt das Plugin den tatsächlich aktiven Backup-Ordner, den freien Speicherplatz und an, ob er außerhalb des Webroots liegt.
+
+Der aktive Backup-Ordner sowie `wp-content/.fg-private` werden immer vom vollständigen Dateibackup ausgeschlossen. Dadurch können lokale Sicherungen, temporäre Dateien und FG-GitHub-Update-Backups nicht rekursiv in ein neues Backup geraten. Der benutzerdefinierte absolute Pfad wird im Datenbankexport geleert.
+
+FG Backup Pro ergänzt Schutzdateien und eine Verwaltungsmarkierung ausschließlich in seinem eigenen Unterordner. Bestehende Backups werden beim Wechsel des Speicherorts nicht automatisch verschoben.
 
 ## GitHub Update
 

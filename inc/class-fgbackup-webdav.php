@@ -208,7 +208,6 @@ class FgBackup_Webdav {
             throw new RuntimeException(__('Die finalisierte WebDAV-Datei konnte nicht bestätigt werden.', 'fg-backup-pro'));
         }
 
-        self::rotate($settings, dirname($remote_path), $settings['retention']);
         return $remote_path;
     }
 
@@ -272,6 +271,11 @@ class FgBackup_Webdav {
             throw new RuntimeException(__('Das WebDAV-Backup wurde nicht gefunden.', 'fg-backup-pro'));
         }
         self::assert_status($response, [200, 202, 204], __('Das WebDAV-Backup konnte nicht gelöscht werden.', 'fg-backup-pro'));
+        try {
+            self::request($settings, 'DELETE', self::url_for_path($settings, $path . '.json'), ['timeout' => 30]);
+        } catch (Throwable $exception) {
+            // Begleitendes Manifest wird bestmöglich entfernt.
+        }
         return true;
     }
 
@@ -299,8 +303,8 @@ class FgBackup_Webdav {
 
     private static function unique_remote_path(array $settings, $directory, $file_name) {
         $file_name = basename(str_replace('\\', '/', (string) $file_name));
-        if (!self::is_backup_file_name($file_name)) {
-            throw new RuntimeException(__('Der Dateiname des Backups ist für WebDAV ungültig.', 'fg-backup-pro'));
+        if (!self::is_remote_artifact_file_name($file_name)) {
+            throw new RuntimeException(__('Der Dateiname der Remote-Datei ist für WebDAV ungültig.', 'fg-backup-pro'));
         }
         $candidate = rtrim($directory, '/') . '/' . $file_name;
         if (self::remote_info($settings, $candidate) === null && self::remote_info($settings, $candidate . '.part') === null) {
@@ -318,7 +322,7 @@ class FgBackup_Webdav {
     }
 
     private static function split_extension($file_name) {
-        foreach (['.sql.zip', '.sql.gz', '.tar.gz', '.tgz', '.zip', '.sql'] as $known) {
+        foreach (['.sql.zip.json', '.sql.gz.json', '.tar.gz.json', '.tgz.json', '.zip.json', '.sql.json', '.sql.zip', '.sql.gz', '.tar.gz', '.tgz', '.zip', '.sql'] as $known) {
             if (substr(strtolower($file_name), -strlen($known)) === $known) {
                 return [substr($file_name, 0, -strlen($known)), substr($file_name, -strlen($known))];
             }
@@ -334,6 +338,18 @@ class FgBackup_Webdav {
             && (bool) preg_match('/(?:\.sql\.zip|\.sql\.gz|\.tar\.gz|\.tgz|\.zip|\.sql)$/i', $name);
     }
 
+    private static function is_remote_artifact_file_name($name) {
+        if (self::is_backup_file_name($name)) {
+            return true;
+        }
+
+        if (!is_string($name) || substr(strtolower($name), -5) !== '.json') {
+            return false;
+        }
+
+        return self::is_backup_file_name(substr($name, 0, -5));
+    }
+
     private static function rotate(array $settings, $directory, $keep) {
         try {
             $response = self::propfind($settings, $directory, 1, true);
@@ -345,19 +361,92 @@ class FgBackup_Webdav {
                 if (!self::is_backup_file_name(isset($item['name']) ? $item['name'] : '')) {
                     continue;
                 }
+                $path = rtrim($directory, '/') . '/' . $item['name'];
                 $files[] = [
                     'name' => $item['name'],
+                    'path' => $path,
                     'mtime' => isset($item['mtime']) ? (int) $item['mtime'] : 0,
+                    'full' => self::is_full_backup_name($item['name']),
+                    'valid' => self::remote_manifest_valid($settings, $path . '.json'),
                 ];
             }
             usort($files, static function ($left, $right) {
                 return $right['mtime'] <=> $left['mtime'];
             });
+
+            $valid_full = 0;
+            $full = 0;
+            foreach ($files as $file) {
+                if (!empty($file['full'])) {
+                    $full++;
+                    if (!empty($file['valid'])) {
+                        $valid_full++;
+                    }
+                }
+            }
+
             foreach (array_slice($files, max(1, (int) $keep)) as $file) {
-                self::request($settings, 'DELETE', self::url_for_path($settings, rtrim($directory, '/') . '/' . $file['name']), ['timeout' => 30]);
+                if (!empty($file['full'])) {
+                    if (!empty($file['valid']) && $valid_full <= 1) {
+                        continue;
+                    }
+                    if ($valid_full === 0 && $full <= 1) {
+                        continue;
+                    }
+                }
+                $delete = self::request($settings, 'DELETE', self::url_for_path($settings, $file['path']), ['timeout' => 30]);
+                if (in_array((int) $delete['status'], [200, 202, 204, 404], true)) {
+                    self::request($settings, 'DELETE', self::url_for_path($settings, $file['path'] . '.json'), ['timeout' => 30]);
+                    if (!empty($file['full'])) {
+                        $full--;
+                        if (!empty($file['valid'])) {
+                            $valid_full--;
+                        }
+                    }
+                }
             }
         } catch (Throwable $exception) {
             // Rotation ist best effort und darf ein erfolgreiches Backup nicht nachträglich entwerten.
+        }
+    }
+
+    private static function is_full_backup_name($name) {
+        return self::is_backup_file_name($name) && !preg_match('/\.sql(?:\.gz|\.zip)?$/i', (string) $name);
+    }
+
+    private static function remote_manifest_valid(array $settings, $path) {
+        try {
+            $response = self::request($settings, 'GET', self::url_for_path($settings, $path), ['timeout' => 30]);
+            if ((int) $response['status'] !== 200) {
+                return false;
+            }
+            $data = json_decode((string) $response['body'], true);
+            return is_array($data) && !empty($data['validation']['status']) && $data['validation']['status'] === 'valid';
+        } catch (Throwable $exception) {
+            return false;
+        }
+    }
+
+    public static function read_remote_manifest($manifest_path) {
+        try {
+            $settings = self::settings();
+            $response = self::request($settings, 'GET', self::url_for_path($settings, (string) $manifest_path), ['timeout' => 30]);
+            if ((int) $response['status'] !== 200) {
+                return [];
+            }
+            $data = json_decode((string) $response['body'], true);
+            return is_array($data) ? $data : [];
+        } catch (Throwable $exception) {
+            return [];
+        }
+    }
+
+    public static function rotate_now() {
+        try {
+            $settings = self::settings();
+            self::rotate($settings, self::resolved_remote_dir($settings), $settings['retention']);
+        } catch (Throwable $exception) {
+            // Rotation ist best effort.
         }
     }
 

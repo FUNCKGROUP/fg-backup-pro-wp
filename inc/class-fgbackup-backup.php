@@ -327,7 +327,11 @@ class FgBackup_Backup {
     }
 
     public static function write_database_footer($file_path) {
-        self::append_to_file($file_path, "\nSET FOREIGN_KEY_CHECKS = 1;\n", true);
+        self::append_to_file(
+            $file_path,
+            "\nSET FOREIGN_KEY_CHECKS = 1;\n\n" . FgBackup_Validator::SQL_COMPLETION_MARKER . "\n",
+            true
+        );
     }
 
     public static function export_table_chunk($table, $file_path, $offset, $write_structure) {
@@ -412,6 +416,7 @@ class FgBackup_Backup {
             'fg_backup_ftp_pass',
             'fg_backup_webdav_pass',
             'fg_backup_onedrive_token',
+            'fg_backup_storage_path',
         ];
 
         foreach ($rows as &$row) {
@@ -543,10 +548,11 @@ class FgBackup_Backup {
     private static function is_excluded($path, $is_directory, $source_root) {
         $normalized = wp_normalize_path($path);
         $relative = '/' . ltrim(substr($normalized, strlen(wp_normalize_path($source_root))), '/');
-        $private_root = trailingslashit(wp_normalize_path(FgBackup_Storage::get_private_root()));
-
-        if (strpos(trailingslashit($normalized), $private_root) === 0) {
-            return true;
+        foreach (FgBackup_Storage::get_excluded_roots() as $excluded_root) {
+            $excluded_root = trailingslashit(wp_normalize_path($excluded_root));
+            if (strpos(trailingslashit($normalized), $excluded_root) === 0) {
+                return true;
+            }
         }
 
         $directory_names = [
@@ -1086,6 +1092,17 @@ class FgBackup_Backup {
             $type = !empty($history['type']) ? $history['type'] : self::detect_type($path, $item);
             $format = !empty($history['format']) ? $history['format'] : self::detect_format($item, $type);
             $mtime = (int) filemtime($path);
+            $manifest = class_exists('FgBackup_Validator') ? FgBackup_Validator::read_manifest_for_backup($path) : [];
+            $validation_status = !empty($manifest['validation']['status'])
+                ? sanitize_key((string) $manifest['validation']['status'])
+                : 'unverified';
+            if (!in_array($validation_status, ['valid', 'warning', 'invalid'], true)) {
+                $validation_status = 'unverified';
+            }
+            $validated_at = !empty($manifest['validation']['validated_at'])
+                ? strtotime((string) $manifest['validation']['validated_at'])
+                : 0;
+
             $backups[] = [
                 'name' => $item,
                 'path' => $path,
@@ -1096,9 +1113,13 @@ class FgBackup_Backup {
                 'size' => size_format((int) filesize($path), 2),
                 'mtime' => $mtime,
                 'date' => wp_date('d.m.Y H:i', $mtime),
-                'checksum' => !empty($history['checksum']) ? (string) $history['checksum'] : '',
-                'verified' => !empty($history) && (!isset($history['status']) || $history['status'] === 'completed'),
-                'note' => !empty($history['note']) ? (string) $history['note'] : '',
+                'checksum' => !empty($manifest['backup']['sha256']) ? (string) $manifest['backup']['sha256'] : (!empty($history['checksum']) ? (string) $history['checksum'] : ''),
+                'verified' => $validation_status === 'valid',
+                'validation_status' => $validation_status,
+                'validated_at' => $validated_at ?: 0,
+                'manifest_exists' => is_file(FgBackup_Validator::sidecar_path($path)),
+                'manifest' => $manifest,
+                'note' => !empty($manifest['backup']['note']) ? (string) $manifest['backup']['note'] : (!empty($history['note']) ? (string) $history['note'] : ''),
             ];
         }
 
@@ -1220,6 +1241,97 @@ class FgBackup_Backup {
         if (!$path) {
             return false;
         }
-        return @unlink($path);
+
+        $deleted = @unlink($path);
+        if ($deleted && class_exists('FgBackup_Validator')) {
+            FgBackup_Validator::delete_manifest($path);
+        }
+        return $deleted;
+    }
+
+    public static function get_backup_info($file_name) {
+        $file_name = self::normalize_backup_filename($file_name);
+        if ($file_name === '') {
+            return false;
+        }
+        foreach (self::list_backups() as $backup) {
+            if (!empty($backup['name']) && $backup['name'] === $file_name) {
+                return $backup;
+            }
+        }
+        return false;
+    }
+
+    public static function update_history_validation($file_name, array $manifest) {
+        $history = get_option('fg_backup_history', []);
+        if (!is_array($history)) {
+            $history = [];
+        }
+
+        $validation_status = !empty($manifest['validation']['status'])
+            ? sanitize_key((string) $manifest['validation']['status'])
+            : 'unverified';
+        $validated_at = !empty($manifest['validation']['validated_at'])
+            ? (int) strtotime((string) $manifest['validation']['validated_at'])
+            : time();
+        $changed = false;
+        $matched = false;
+
+        foreach ($history as &$entry) {
+            if (!is_array($entry) || empty($entry['file']) || $entry['file'] !== $file_name) {
+                continue;
+            }
+            $entry['validation_status'] = $validation_status;
+            $entry['validated_at'] = $validated_at;
+            $entry['checksum'] = !empty($manifest['backup']['sha256']) ? (string) $manifest['backup']['sha256'] : '';
+            $entry['manifest_file'] = $file_name . '.json';
+            $changed = true;
+            $matched = true;
+        }
+        unset($entry);
+
+        // A manually validated legacy or imported backup may not have a job history entry.
+        // Add a compact synthetic completed entry only when it is demonstrably valid, so
+        // the health check can use it without treating unverified artifacts as successful runs.
+        if (!$matched && $validation_status === 'valid') {
+            $backup = self::get_backup_info($file_name);
+            if (is_array($backup)) {
+                $created_at = !empty($manifest['backup']['created_at'])
+                    ? (int) strtotime((string) $manifest['backup']['created_at'])
+                    : (int) $backup['mtime'];
+                if ($created_at <= 0) {
+                    $created_at = (int) $backup['mtime'];
+                }
+                array_unshift($history, [
+                    'id' => !empty($manifest['backup']['id'])
+                        ? (string) $manifest['backup']['id']
+                        : 'validation-' . substr(hash('sha256', $file_name), 0, 16),
+                    'status' => 'completed',
+                    'type' => !empty($backup['type']) ? (string) $backup['type'] : 'full',
+                    'format' => !empty($backup['format']) ? (string) $backup['format'] : '',
+                    'origin' => 'validation',
+                    'started_at' => $created_at,
+                    'finished_at' => $created_at,
+                    'file' => $file_name,
+                    'size' => !empty($backup['size_raw']) ? (int) $backup['size_raw'] : 0,
+                    'checksum' => !empty($manifest['backup']['sha256']) ? (string) $manifest['backup']['sha256'] : '',
+                    'manifest_file' => $file_name . '.json',
+                    'validation_status' => 'valid',
+                    'validated_at' => $validated_at,
+                    'error' => '',
+                    'note' => !empty($manifest['backup']['note']) ? (string) $manifest['backup']['note'] : '',
+                    'remote_status' => 'disabled',
+                    'remote_path' => '',
+                    'remote_results' => [],
+                    'remote_errors' => [],
+                    'local_deleted' => false,
+                ]);
+                $changed = true;
+            }
+        }
+
+        if ($changed) {
+            update_option('fg_backup_history', array_slice($history, 0, 20), false);
+        }
     }
 }

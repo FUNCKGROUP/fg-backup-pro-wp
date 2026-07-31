@@ -380,7 +380,6 @@ class FgBackup_Dropbox {
         if (!isset($metadata['size']) || (int) $metadata['size'] !== $total) {
             throw new RuntimeException(__('Die finalisierte Dropbox-Datei konnte nicht bestätigt werden.', 'fg-backup-pro'));
         }
-        self::rotate(dirname($remote_path), self::settings()['retention']);
         return $remote_path;
     }
 
@@ -422,6 +421,11 @@ class FgBackup_Dropbox {
         self::assert_ready();
         $path = rtrim(self::resolved_remote_dir(), '/') . '/' . $file_name;
         self::rpc_request('files/delete_v2', ['path' => $path], [200]);
+        try {
+            self::rpc_request('files/delete_v2', ['path' => $path . '.json'], [200, 409]);
+        } catch (Throwable $exception) {
+            // Begleitendes Manifest wird bestmöglich entfernt.
+        }
         return true;
     }
 
@@ -653,8 +657,8 @@ class FgBackup_Dropbox {
 
     private static function unique_remote_path($directory, $file_name) {
         $file_name = basename(str_replace('\\', '/', (string) $file_name));
-        if (!self::is_backup_file_name($file_name)) {
-            throw new RuntimeException(__('Der Dateiname des Backups ist für Dropbox ungültig.', 'fg-backup-pro'));
+        if (!self::is_remote_artifact_file_name($file_name)) {
+            throw new RuntimeException(__('Der Dateiname der Remote-Datei ist für Dropbox ungültig.', 'fg-backup-pro'));
         }
         $candidate = rtrim($directory, '/') . '/' . $file_name;
         if (!self::path_exists($candidate)) {
@@ -707,26 +711,97 @@ class FgBackup_Dropbox {
         try {
             $files = [];
             foreach (self::list_folder($directory) as $entry) {
-                if (isset($entry['.tag']) && $entry['.tag'] === 'file' && self::is_backup_file_name(isset($entry['name']) ? $entry['name'] : '')) {
-                    $files[] = [
-                        'path' => isset($entry['path_display']) ? $entry['path_display'] : rtrim($directory, '/') . '/' . $entry['name'],
-                        'mtime' => !empty($entry['server_modified']) ? (int) strtotime($entry['server_modified']) : 0,
-                    ];
+                if (!isset($entry['.tag']) || $entry['.tag'] !== 'file' || !self::is_backup_file_name(isset($entry['name']) ? $entry['name'] : '')) {
+                    continue;
                 }
+                $path = isset($entry['path_display']) ? $entry['path_display'] : rtrim($directory, '/') . '/' . $entry['name'];
+                $files[] = [
+                    'path' => $path,
+                    'name' => isset($entry['name']) ? (string) $entry['name'] : basename($path),
+                    'mtime' => !empty($entry['server_modified']) ? (int) strtotime($entry['server_modified']) : 0,
+                    'full' => self::is_full_backup_name(isset($entry['name']) ? $entry['name'] : ''),
+                    'valid' => self::remote_manifest_valid($path . '.json'),
+                ];
             }
             usort($files, static function ($left, $right) {
                 return $right['mtime'] <=> $left['mtime'];
             });
+
+            $valid_full = 0;
+            $full = 0;
+            foreach ($files as $file) {
+                if (!empty($file['full'])) {
+                    $full++;
+                    if (!empty($file['valid'])) {
+                        $valid_full++;
+                    }
+                }
+            }
+
             foreach (array_slice($files, max(1, (int) $keep)) as $file) {
-                self::rpc_request('files/delete_v2', ['path' => $file['path']], [200, 409]);
+                if (!empty($file['full'])) {
+                    if (!empty($file['valid']) && $valid_full <= 1) {
+                        continue;
+                    }
+                    if ($valid_full === 0 && $full <= 1) {
+                        continue;
+                    }
+                }
+                $response = self::rpc_request('files/delete_v2', ['path' => $file['path']], [200, 409]);
+                self::rpc_request('files/delete_v2', ['path' => $file['path'] . '.json'], [200, 409]);
+                if ((int) $response['status'] === 200 && !empty($file['full'])) {
+                    $full--;
+                    if (!empty($file['valid'])) {
+                        $valid_full--;
+                    }
+                }
             }
         } catch (Throwable $exception) {
             // Rotation ist best effort.
         }
     }
 
+    private static function is_full_backup_name($name) {
+        return self::is_backup_file_name($name) && !preg_match('/\.sql(?:\.gz|\.zip)?$/i', (string) $name);
+    }
+
+    private static function remote_manifest_valid($path) {
+        try {
+            $response = self::content_request('files/download', ['path' => $path], '', [200, 409]);
+            if ((int) $response['status'] !== 200) {
+                return false;
+            }
+            $data = json_decode((string) $response['body'], true);
+            return is_array($data) && !empty($data['validation']['status']) && $data['validation']['status'] === 'valid';
+        } catch (Throwable $exception) {
+            return false;
+        }
+    }
+
+    public static function read_remote_manifest($manifest_path) {
+        try {
+            $response = self::content_request('files/download', ['path' => (string) $manifest_path], '', [200, 409]);
+            if ((int) $response['status'] !== 200) {
+                return [];
+            }
+            $data = json_decode((string) $response['body'], true);
+            return is_array($data) ? $data : [];
+        } catch (Throwable $exception) {
+            return [];
+        }
+    }
+
+    public static function rotate_now() {
+        try {
+            $settings = self::settings();
+            self::rotate(self::resolved_remote_dir($settings), $settings['retention']);
+        } catch (Throwable $exception) {
+            // Rotation ist best effort.
+        }
+    }
+
     private static function split_extension($file_name) {
-        foreach (['.sql.zip', '.sql.gz', '.tar.gz', '.tgz', '.zip', '.sql'] as $known) {
+        foreach (['.sql.zip.json', '.sql.gz.json', '.tar.gz.json', '.tgz.json', '.zip.json', '.sql.json', '.sql.zip', '.sql.gz', '.tar.gz', '.tgz', '.zip', '.sql'] as $known) {
             if (substr(strtolower($file_name), -strlen($known)) === $known) {
                 return [substr($file_name, 0, -strlen($known)), substr($file_name, -strlen($known))];
             }
@@ -739,6 +814,18 @@ class FgBackup_Dropbox {
             && $name !== ''
             && basename($name) === $name
             && (bool) preg_match('/(?:\.sql\.zip|\.sql\.gz|\.tar\.gz|\.tgz|\.zip|\.sql)$/i', $name);
+    }
+
+    private static function is_remote_artifact_file_name($name) {
+        if (self::is_backup_file_name($name)) {
+            return true;
+        }
+
+        if (!is_string($name) || substr(strtolower($name), -5) !== '.json') {
+            return false;
+        }
+
+        return self::is_backup_file_name(substr($name, 0, -5));
     }
 
     private static function rpc_request($endpoint, $payload, array $allowed_statuses) {

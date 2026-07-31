@@ -13,6 +13,9 @@ class FgBackup_Admin {
         add_action('wp_ajax_fg_backup_status', [__CLASS__, 'ajax_status']);
         add_action('wp_ajax_fg_backup_cancel', [__CLASS__, 'ajax_cancel']);
         add_action('wp_ajax_fg_backup_health_check', [__CLASS__, 'ajax_health_check']);
+        add_action('wp_ajax_fg_backup_storage_test', [__CLASS__, 'ajax_storage_test']);
+        add_action('wp_ajax_fg_backup_validate', [__CLASS__, 'ajax_validate']);
+        add_action('wp_ajax_fg_backup_validation_report', [__CLASS__, 'ajax_validation_report']);
         add_action('wp_ajax_fg_backup_sftp_test', [__CLASS__, 'ajax_sftp_test']);
         add_action('wp_ajax_fg_backup_sftp_reset_key', [__CLASS__, 'ajax_sftp_reset_key']);
         add_action('wp_ajax_fg_backup_sftp_list', [__CLASS__, 'ajax_sftp_list']);
@@ -33,6 +36,7 @@ class FgBackup_Admin {
         add_action('wp_ajax_fg_backup_s3_delete', [__CLASS__, 'ajax_s3_delete']);
         add_action('rest_api_init', [__CLASS__, 'register_rest_routes']);
         add_action('admin_post_fg_backup_download', [__CLASS__, 'download']);
+        add_action('admin_post_fg_backup_manifest', [__CLASS__, 'download_manifest']);
         add_action('admin_post_fg_backup_delete', [__CLASS__, 'delete']);
         add_action('admin_post_fg_backup_bulk_delete', [__CLASS__, 'bulk_delete']);
     }
@@ -129,6 +133,8 @@ class FgBackup_Admin {
             'fg_backup_notification_mode' => 'off',
             'fg_backup_notification_email' => get_option('admin_email'),
             'fg_backup_exclusions' => '',
+            'fg_backup_storage_mode' => FgBackup_Storage::MODE_CONTENT,
+            'fg_backup_storage_path' => '',
             'fg_backup_keep_local' => 1,
             'fg_backup_sftp_enabled' => 0,
             'fg_backup_sftp_host' => '',
@@ -257,6 +263,16 @@ class FgBackup_Admin {
             'type' => 'string',
             'sanitize_callback' => [__CLASS__, 'sanitize_notification_email'],
             'default' => get_option('admin_email'),
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_storage_mode', [
+            'type' => 'string',
+            'sanitize_callback' => [__CLASS__, 'sanitize_storage_mode'],
+            'default' => FgBackup_Storage::MODE_CONTENT,
+        ]);
+        register_setting('fg_backup_settings', 'fg_backup_storage_path', [
+            'type' => 'string',
+            'sanitize_callback' => [__CLASS__, 'sanitize_storage_path'],
+            'default' => '',
         ]);
         register_setting('fg_backup_settings', 'fg_backup_exclusions', [
             'type' => 'string',
@@ -387,6 +403,59 @@ class FgBackup_Admin {
 
     public static function sanitize_filename_pattern($value) {
         return FgBackup_Backup::sanitize_filename_pattern($value);
+    }
+
+    public static function sanitize_storage_mode($value) {
+        $mode = FgBackup_Storage::sanitize_mode_value((string) $value);
+
+        if ($mode === FgBackup_Storage::MODE_CUSTOM) {
+            $raw_path = isset($_POST['fg_backup_storage_path'])
+                ? wp_unslash((string) $_POST['fg_backup_storage_path'])
+                : (string) get_option('fg_backup_storage_path', '');
+            $path = FgBackup_Storage::normalize_base_path($raw_path);
+
+            if ($path === '') {
+                add_settings_error(
+                    'fg_backup_settings',
+                    'fg_backup_storage_path_invalid',
+                    __('Bitte für den benutzerdefinierten Speicherort einen gültigen absoluten lokalen Pfad angeben.', 'fg-backup-pro'),
+                    'error'
+                );
+                return FgBackup_Storage::sanitize_mode_value((string) get_option('fg_backup_storage_mode', FgBackup_Storage::MODE_CONTENT));
+            }
+
+            try {
+                FgBackup_Storage::test_configuration($mode, $path);
+            } catch (Throwable $exception) {
+                add_settings_error('fg_backup_settings', 'fg_backup_storage_test_failed', $exception->getMessage(), 'error');
+                return FgBackup_Storage::sanitize_mode_value((string) get_option('fg_backup_storage_mode', FgBackup_Storage::MODE_CONTENT));
+            }
+        }
+
+        FgBackup_Storage::reset_cache();
+        return $mode;
+    }
+
+    public static function sanitize_storage_path($value) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            FgBackup_Storage::reset_cache();
+            return '';
+        }
+
+        $path = FgBackup_Storage::normalize_base_path($value);
+        if ($path === '') {
+            add_settings_error(
+                'fg_backup_settings',
+                'fg_backup_storage_path_invalid',
+                __('Der lokale Speicherpfad muss ein absoluter Dateisystempfad ohne URL- oder Stream-Protokoll sein.', 'fg-backup-pro'),
+                'error'
+            );
+            return (string) get_option('fg_backup_storage_path', '');
+        }
+
+        FgBackup_Storage::reset_cache();
+        return untrailingslashit($path);
     }
 
     public static function sanitize_schedule($value) {
@@ -588,6 +657,8 @@ class FgBackup_Admin {
             'webdavTestText' => __('WebDAV-Verbindung wird getestet …', 'fg-backup-pro'),
             'dropboxTestText' => __('Dropbox-Verbindung wird getestet …', 'fg-backup-pro'),
             's3TestText' => __('S3-Verbindung wird getestet …', 'fg-backup-pro'),
+            'storageTestText' => __('Lokaler Speicherort wird geprüft …', 'fg-backup-pro'),
+            'storageTestFailedText' => __('Der lokale Speicherort konnte nicht geprüft werden.', 'fg-backup-pro'),
             'remoteListLoadingText' => __('Remote-Dateien werden geladen …', 'fg-backup-pro'),
             'remoteListEmptyText' => __('Keine Remote-Backups gefunden.', 'fg-backup-pro'),
             'remoteDeleteConfirmText' => __('Remote-Backup wirklich löschen?', 'fg-backup-pro'),
@@ -604,6 +675,10 @@ class FgBackup_Admin {
             'bulkDeleteConfirmText' => __('Ausgewählte Backups wirklich löschen?', 'fg-backup-pro'),
             'bulkDeleteNoneText' => __('Bitte mindestens ein Backup auswählen.', 'fg-backup-pro'),
             'bulkSelectedText' => __('%d ausgewählt', 'fg-backup-pro'),
+            'validateText' => __('Backup wird vollständig validiert …', 'fg-backup-pro'),
+            'validateDoneText' => __('Validierung abgeschlossen.', 'fg-backup-pro'),
+            'bulkValidateNoneText' => __('Bitte mindestens ein Backup für die Validierung auswählen.', 'fg-backup-pro'),
+            'reportLoadingText' => __('Prüfbericht wird geladen …', 'fg-backup-pro'),
             'activeJobId' => is_array($active_job) && !empty($active_job['id']) ? $active_job['id'] : '',
             'pageUrl' => admin_url('admin.php?page=fg-backup-pro'),
             'filenamePreview' => [
@@ -750,6 +825,36 @@ class FgBackup_Admin {
             'callback' => ['FgBackup_Dropbox', 'rest_callback'],
             'permission_callback' => '__return_true',
         ]);
+    }
+
+    public static function ajax_storage_test() {
+        self::assert_ajax_admin();
+
+        $mode = isset($_POST['mode']) ? sanitize_key(wp_unslash((string) $_POST['mode'])) : FgBackup_Storage::MODE_CONTENT;
+        $path = isset($_POST['path']) ? wp_unslash((string) $_POST['path']) : '';
+
+        try {
+            $result = FgBackup_Storage::test_configuration($mode, $path);
+            $free = $result['free_bytes'] !== null ? size_format($result['free_bytes'], 2) : __('unbekannt', 'fg-backup-pro');
+            $message = sprintf(
+                __('Speicherort ist nutzbar. Frei: %1$s · Außerhalb des Webroots: %2$s', 'fg-backup-pro'),
+                $free,
+                !empty($result['outside_webroot']) ? __('Ja', 'fg-backup-pro') : __('Nein', 'fg-backup-pro')
+            );
+            if (!empty($result['fallback']) && !empty($result['fallback_reason'])) {
+                $message = $result['fallback_reason'] . ' ' . $message;
+            }
+
+            wp_send_json_success([
+                'message' => $message,
+                'path' => $result['path'],
+                'free' => $free,
+                'outside_webroot' => !empty($result['outside_webroot']),
+                'fallback' => !empty($result['fallback']),
+            ]);
+        } catch (Throwable $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
     }
 
     public static function ajax_sftp_test() {
@@ -995,6 +1100,102 @@ class FgBackup_Admin {
         ]);
     }
 
+    public static function ajax_validate() {
+        self::assert_ajax_admin();
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(0);
+        }
+
+        $raw_files = [];
+        if (isset($_POST['backups']) && is_array($_POST['backups'])) {
+            $raw_files = wp_unslash($_POST['backups']);
+        } elseif (isset($_POST['file'])) {
+            $raw_files = [wp_unslash($_POST['file'])];
+        }
+
+        $files = [];
+        foreach (array_slice($raw_files, 0, 20) as $raw_file) {
+            $file = FgBackup_Backup::normalize_backup_filename((string) $raw_file);
+            if ($file !== '') {
+                $files[$file] = $file;
+            }
+        }
+        if (!$files) {
+            wp_send_json_error(['message' => __('Bitte mindestens ein gültiges Backup auswählen.', 'fg-backup-pro')]);
+        }
+
+        $items = [];
+        foreach ($files as $file) {
+            $info = FgBackup_Backup::get_backup_info($file);
+            if (!$info || empty($info['path'])) {
+                $items[] = [
+                    'file' => $file,
+                    'status' => 'invalid',
+                    'status_label' => FgBackup_Validator::status_label('invalid'),
+                    'error' => __('Backup nicht gefunden.', 'fg-backup-pro'),
+                ];
+                continue;
+            }
+
+            try {
+                $manifest = FgBackup_Validator::validate_and_write(
+                    $info['path'],
+                    $info['type'],
+                    $info['format'],
+                    [
+                        'started_at' => !empty($info['mtime']) ? (int) $info['mtime'] : time(),
+                        'note' => !empty($info['note']) ? (string) $info['note'] : '',
+                    ]
+                );
+                FgBackup_Backup::update_history_validation($file, $manifest);
+                $status = !empty($manifest['validation']['status']) ? sanitize_key((string) $manifest['validation']['status']) : 'invalid';
+                $items[] = [
+                    'file' => $file,
+                    'status' => $status,
+                    'status_label' => FgBackup_Validator::status_label($status),
+                    'validated_at' => !empty($manifest['validation']['validated_at']) ? wp_date('d.m.Y H:i', (int) strtotime((string) $manifest['validation']['validated_at'])) : '',
+                    'manifest_exists' => true,
+                    'checks' => isset($manifest['validation']['checks']) ? array_values((array) $manifest['validation']['checks']) : [],
+                    'error' => '',
+                ];
+            } catch (Throwable $exception) {
+                $items[] = [
+                    'file' => $file,
+                    'status' => 'invalid',
+                    'status_label' => FgBackup_Validator::status_label('invalid'),
+                    'error' => sanitize_text_field($exception->getMessage()),
+                ];
+            }
+        }
+
+        FgBackup_Health::refresh_after_job();
+        wp_send_json_success([
+            'message' => __('Validierung abgeschlossen.', 'fg-backup-pro'),
+            'items' => $items,
+        ]);
+    }
+
+    public static function ajax_validation_report() {
+        self::assert_ajax_admin();
+        $file = isset($_POST['file']) ? FgBackup_Backup::normalize_backup_filename(wp_unslash($_POST['file'])) : '';
+        if ($file === '') {
+            wp_send_json_error(['message' => __('Ungültiger Backup-Dateiname.', 'fg-backup-pro')]);
+        }
+        $path = FgBackup_Backup::get_backup_path($file);
+        if (!$path) {
+            wp_send_json_error(['message' => __('Backup nicht gefunden.', 'fg-backup-pro')]);
+        }
+        $manifest = FgBackup_Validator::read_manifest_for_backup($path);
+        if (!$manifest) {
+            wp_send_json_error(['message' => __('Für dieses Backup existiert noch kein Prüfbericht. Bitte zuerst validieren.', 'fg-backup-pro')]);
+        }
+        wp_send_json_success([
+            'file' => $file,
+            'manifest' => $manifest,
+            'status_label' => FgBackup_Validator::status_label(!empty($manifest['validation']['status']) ? $manifest['validation']['status'] : 'unverified'),
+        ]);
+    }
+
     public static function ajax_start() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => __('Keine Berechtigung.', 'fg-backup-pro')], 403);
@@ -1040,6 +1241,8 @@ class FgBackup_Admin {
             'remote_results' => isset($job['remote_results']) ? (array) $job['remote_results'] : [],
             'remote_summary' => FgBackup_Remotes::summarize(isset($job['remote_results']) ? (array) $job['remote_results'] : []),
             'local_deleted' => !empty($job['local_deleted']),
+            'validation_status' => isset($job['validation_status']) ? $job['validation_status'] : 'unverified',
+            'manifest_file' => isset($job['manifest_file_name']) ? $job['manifest_file_name'] : '',
         ]);
     }
 
@@ -1086,7 +1289,7 @@ class FgBackup_Admin {
 
         nocache_headers();
         header('Content-Type: application/octet-stream');
-        $download_name = str_replace(['\r', '\n', '"'], '', basename($path));
+        $download_name = str_replace(["\r", "\n", '"'], '', basename($path));
         header('Content-Disposition: attachment; filename="' . $download_name . '"; filename*=UTF-8\'\'' . rawurlencode($download_name));
         header('Content-Length: ' . filesize($path));
         header('X-Content-Type-Options: nosniff');
@@ -1096,6 +1299,34 @@ class FgBackup_Admin {
             fpassthru($handle);
             fclose($handle);
         }
+        exit;
+    }
+
+    public static function download_manifest() {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('Keine Berechtigung.', 'fg-backup-pro'), 403);
+        }
+
+        $file = isset($_GET['file']) ? FgBackup_Backup::normalize_backup_filename(wp_unslash($_GET['file'])) : '';
+        if ($file === '') {
+            wp_die(esc_html__('Ungültiger Backup-Dateiname.', 'fg-backup-pro'), 400);
+        }
+        check_admin_referer('fg_backup_manifest_' . $file);
+        $backup_path = FgBackup_Backup::get_backup_path($file);
+        $path = $backup_path ? FgBackup_Validator::sidecar_path($backup_path) : '';
+        if ($path === '' || !is_file($path) || !is_readable($path)) {
+            wp_die(esc_html__('JSON-Manifest nicht gefunden.', 'fg-backup-pro'), 404);
+        }
+
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+        nocache_headers();
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . str_replace(["\r", "\n", '"'], '', basename($path)) . '"');
+        header('Content-Length: ' . filesize($path));
+        header('X-Content-Type-Options: nosniff');
+        readfile($path);
         exit;
     }
 

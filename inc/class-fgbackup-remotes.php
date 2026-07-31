@@ -108,6 +108,22 @@ class FgBackup_Remotes {
         }
     }
 
+    public static function rotate($id) {
+        $class = self::class_name($id);
+        if (is_callable([$class, 'rotate_now'])) {
+            $class::rotate_now();
+        }
+    }
+
+    public static function read_manifest($id, $manifest_path) {
+        $class = self::class_name($id);
+        if (!is_callable([$class, 'read_remote_manifest'])) {
+            return [];
+        }
+        $manifest = $class::read_remote_manifest((string) $manifest_path);
+        return is_array($manifest) ? $manifest : [];
+    }
+
     public static function summarize(array $results) {
         $parts = [];
         foreach ($results as $id => $result) {
