@@ -11,6 +11,9 @@
         var $detail = $status.find('.fg-backup-detail');
         var $percent = $status.find('.fg-backup-percent');
         var $progress = $status.find('.fg-backup-progress span');
+        var $lastActivity = $status.find('.fg-backup-last-activity');
+        var $executionMode = $status.find('.fg-backup-execution-mode');
+        var $cleanupJobButton = $('#fg-backup-cleanup-job');
         var currentJobId = fgBackupPro.activeJobId || '';
         var $filenamePattern = $('#fg-backup-filename-pattern');
         var $filenamePreview = $('#fg-backup-filename-preview');
@@ -327,6 +330,30 @@
             $progress.css('width', value + '%');
         }
 
+        function updateRuntime(job) {
+            if (!job) {
+                $lastActivity.text('');
+                $executionMode.text('');
+                $cleanupJobButton.attr('hidden', 'hidden');
+                return;
+            }
+
+            $lastActivity.text(job.updated_label ? 'Letzte Aktivität: ' + job.updated_label : '');
+            if (job.execution_mode === 'cli') {
+                $executionMode.text('PHP-CLI-Worker');
+            } else if (job.execution_mode === 'http') {
+                $executionMode.text('HTTP-/WP-Cron-Fallback');
+            } else {
+                $executionMode.text('');
+            }
+
+            if (job.status === 'failed' || job.status === 'canceled') {
+                $cleanupJobButton.removeAttr('hidden').prop('disabled', false);
+            } else {
+                $cleanupJobButton.attr('hidden', 'hidden');
+            }
+        }
+
         function getAdminBarItem() {
             return $('#wp-admin-bar-fg-backup-pro-status');
         }
@@ -404,7 +431,6 @@
                 updateAdminBar({status: 'queued', progress: 0, stage: 'Backup startet'});
             } else {
                 $cancelButton.attr('hidden', 'hidden').prop('disabled', false);
-                currentJobId = '';
             }
         }
 
@@ -424,6 +450,7 @@
 
                 var job = response.data;
                 showStatus(job.stage, job.detail, job.progress);
+                updateRuntime(job);
                 updateAdminBar(job);
 
                 if (job.status === 'completed' || job.status === 'completed_with_errors') {
@@ -469,6 +496,28 @@
                 setRunning(false);
             });
         }
+
+        $cleanupJobButton.on('click', function () {
+            if (!currentJobId) {
+                return;
+            }
+            $cleanupJobButton.prop('disabled', true);
+            $.post(fgBackupPro.ajaxUrl, {
+                action: 'fg_backup_cleanup_job',
+                security: fgBackupPro.nonce,
+                job_id: currentJobId
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    $detail.text(response && response.data && response.data.message ? response.data.message : fgBackupPro.failedText);
+                    $cleanupJobButton.prop('disabled', false);
+                    return;
+                }
+                $detail.text(response.data.message || 'Temporäre Jobdaten wurden bereinigt.');
+                $cleanupJobButton.attr('hidden', 'hidden');
+            }).fail(function () {
+                $cleanupJobButton.prop('disabled', false);
+            });
+        });
 
         $button.on('click', function () {
             setRunning(true);

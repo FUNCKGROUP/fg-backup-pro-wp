@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.4.2 – 01.08.2026
+
+- große Dropbox-Dateien werden weiterhin über Upload Sessions übertragen, der bestätigte Offset wird jetzt nach jedem erfolgreichen Datenblock dauerhaft gespeichert
+- Dropbox-Uploads synchronisieren sich nach einer unterbrochenen oder uneindeutig beantworteten Anfrage über den von Dropbox gemeldeten `correct_offset`
+- begrenzte Wiederholungen für Netzwerkfehler, HTTP 429 und vorübergehende Dropbox-Fehler; keine Endlosschleifen
+- Datenblöcke für Dropbox auf 32 MiB vergrößert, um die Zahl der API-Aufrufe bei sehr großen Sicherungen deutlich zu reduzieren
+- Dropbox-Finalisierung ist idempotent: Eine bereits vollständig angelegte Remote-Datei wird nach Worker-Abbruch über Pfad und Größe bestätigt statt erneut finalisiert
+- PHP-CLI-Worker übergeben lange Aufträge ungefähr alle fünf Minuten geordnet an einen neuen Worker-Prozess und umgehen damit Hosting-Limits von etwa 30 Minuten pro Prozess
+- ein unerwartet beendeter Worker kann einen laufenden Dropbox-Upload bis zu drei Mal ab dem gespeicherten Offset wieder aufnehmen
+- Worker-Heartbeat und Remote-Offset werden während des Uploads nach jedem Block aktualisiert
+- bei bewusstem Abbruch wird das für den aktuellen Lauf erzeugte lokale Backup samt JSON-Manifest entfernt, wenn „lokal behalten“ deaktiviert ist
+- bei einem automatischen Remote-Fehler bleibt das verifizierte lokale Backup weiterhin zur Sicherheit erhalten
+- Fehlermeldungen unterscheiden jetzt klar zwischen bereinigten temporären Daten und einem absichtlich erhaltenen lokalen Backup
+
+## 2.4.1 – 01.08.2026
+
+- ZIP-Vollbackups werden nicht mehr in 150-Datei-AJAX-Batches wiederholt geöffnet und geschlossen
+- separater PHP-CLI-Worker für lange Backup-Schritte mit automatischer Erkennung von PHP-CLI, `proc_open`, `exec` und `shell_exec`
+- Browser und AJAX starten den Auftrag nur noch und lesen anschließend den dauerhaft gespeicherten Status
+- ZIP wird einmal geöffnet, vollständig aus `files.jsonl` befüllt und einmal geschlossen
+- tatsächlicher Archivfortschritt nach Dateien und Bytes; zusätzlicher libzip-Schließfortschritt über `registerProgressCallback`, sofern verfügbar
+- kontrollierter ZIP-Abbruch über `cancel.flag` und `registerCancelCallback`, sofern verfügbar
+- Heartbeat, Ausführungsmodus, Worker-PID, letzter Aktivitätszeitpunkt und aktueller Versuch werden im Jobstatus gespeichert
+- abgestürzte HTTP- oder CLI-Prozesse werden erkannt und erhalten einen konkreten Fehlerstatus
+- derselbe abgebrochene Archivierungsschritt wird nicht automatisch erneut ausgeführt
+- begrenzter HTTP-/WP-Cron-Fallback für kleine Aufträge; große ZIP-Aufträge ohne startfähigen CLI-Worker werden mit verständlicher Hosting-Meldung beendet
+- verwaiste `backup.zip.part.*`-Dateien, alte temporäre Jobordner und alte Joblogs werden automatisch bereinigt
+- Abbruch wird auch bei bereits fehlendem temporärem Jobordner vollständig abgeschlossen
+- manuelle Aufräumaktion für fehlgeschlagene und abgebrochene Jobs
+- kleines dauerhaftes `job.log` pro Auftrag mit Größenbegrenzung
+- Fortschrittsanzeige trennt Datenbankexport, Dateiscan, ZIP-Hinzufügen, ZIP-Abschluss, Validierung und Remote-Upload
+- zusätzliche Ausschlüsse werden relativ zu `ABSPATH` normalisiert, doppelte Slashes entfernt, Backslashes vereinheitlicht und Pfade mit `..` verworfen
+- bereits komprimierte Dateiformate werden im ZIP ohne erneuten Kompressionsversuch gespeichert, sofern libzip dies unterstützt
+- keine künstliche ZIP-Größenbegrenzung im CLI-Worker
+
 ## 2.4.0 – 31.07.2026
 
 - versioniertes JSON-Manifest als gleichnamige Sidecar-Datei neben jeder Sicherung

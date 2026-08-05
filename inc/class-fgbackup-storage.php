@@ -72,6 +72,20 @@ class FgBackup_Storage {
         return self::get_plugin_root() . 'temporary/';
     }
 
+    public static function get_log_root() {
+        self::ensure();
+        return self::get_plugin_root() . 'logs/';
+    }
+
+    public static function get_job_log_path($job_id) {
+        $safe_job_id = sanitize_key($job_id);
+        if ($safe_job_id === '') {
+            return '';
+        }
+
+        return self::get_log_root() . $safe_job_id . '.log';
+    }
+
     public static function create_job_temp_dir($job_id) {
         $safe_job_id = sanitize_key($job_id);
         if ($safe_job_id === '') {
@@ -283,8 +297,9 @@ class FgBackup_Storage {
         $plugin_root = trailingslashit($base_root) . 'fg-backup-pro/';
         $backup_dir = $plugin_root . 'backups/';
         $temp_dir = $plugin_root . 'temporary/';
+        $log_dir = $plugin_root . 'logs/';
 
-        foreach ([$base_root, $plugin_root, $backup_dir, $temp_dir] as $directory) {
+        foreach ([$base_root, $plugin_root, $backup_dir, $temp_dir, $log_dir] as $directory) {
             if (!is_dir($directory) && !wp_mkdir_p($directory)) {
                 throw new RuntimeException(sprintf(
                     __('Verzeichnis konnte nicht erstellt werden: %s', 'fg-backup-pro'),
@@ -303,6 +318,7 @@ class FgBackup_Storage {
         self::write_protection_files($plugin_root);
         self::write_protection_files($backup_dir);
         self::write_protection_files($temp_dir);
+        self::write_protection_files($log_dir);
         self::write_marker($plugin_root);
 
         return [
@@ -310,6 +326,7 @@ class FgBackup_Storage {
             'plugin_root' => trailingslashit(wp_normalize_path($plugin_root)),
             'backup_dir' => trailingslashit(wp_normalize_path($backup_dir)),
             'temp_dir' => trailingslashit(wp_normalize_path($temp_dir)),
+            'log_dir' => trailingslashit(wp_normalize_path($log_dir)),
         ];
     }
 

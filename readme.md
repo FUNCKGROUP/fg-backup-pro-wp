@@ -2,11 +2,16 @@
 
 FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen an einem geschützten, frei wählbaren lokalen Speicherort und überträgt sie optional zu mehreren Remote-Zielen. Die Verwaltung erfolgt als eigener Eintrag **FG Backup Pro** innerhalb von FG Core.
 
-## Version 2.4.0
+## Version 2.4.2
 
 - vollständige Backups als ZIP oder TGZ
 - Datenbank-Backups als SQL, SQL.GZ oder SQL.ZIP
-- asynchrone Verarbeitung mit Fortschritt in der Backup-Seite und WordPress-Adminleiste
+- unabhängiger PHP-CLI-Worker für lange Backup-Schritte mit sicherem HTTP-/WP-Cron-Fallback
+- geordnete Worker-Übergabe bei langen Läufen, damit Prozesslimits des Hostings nicht den gesamten Auftrag beenden
+- ZIP-Vollbackups werden einmal geöffnet, vollständig befüllt und einmal geschlossen
+- echter Fortschritt nach Dateien, Bytes und – sofern von libzip unterstützt – beim finalen ZIP-Schreibvorgang
+- Heartbeat, letzte Aktivität, Worker-Status und kleines Joblog pro Backup-Auftrag
+- asynchrone Statusanzeige in der Backup-Seite und WordPress-Adminleiste
 - kontrolliertes Abbrechen und Bereinigung unvollständiger Dateien
 - frei definierbare Dateinamen mit Live-Vorschau und Platzhaltern
 - strukturelle Prüfung, lokale Rotation und geschützte Downloads
@@ -17,6 +22,7 @@ FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen an einem gesc
 - SFTP über phpseclib 3 mit Passwort oder SSH-Schlüssel
 - WebDAV für Nextcloud, QNAP, Hetzner Storage Box, NAS und andere kompatible Server
 - Dropbox über OAuth 2.0, PKCE und Refresh-Token
+- fortsetzbare Dropbox-Upload-Sessions mit dauerhaftem Offset, begrenzten Wiederholungen und Synchronisierung nach Verbindungsabbrüchen
 - S3-kompatibler Object Storage über AWS Signature Version 4
 - praktisch getestet mit Amazon S3 und Backblaze B2
 - Multipart-Uploads für große S3-Backups ohne AWS-SDK-Abhängigkeit
@@ -55,6 +61,7 @@ FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen an einem gesc
 - GZIP/Zlib für SQL.GZ
 - PHP-cURL für WebDAV, Dropbox und S3
 - PHP-DOM für WebDAV und S3-XML-Antworten
+- für große ZIP-Vollbackups eine ausführbare PHP-CLI-Datei und mindestens eine verfügbare Startfunktion: `proc_open`, `exec` oder `shell_exec`
 - WebDAV-Server mit Basic-Authentifizierung über HTTPS
 
 Eine installierbare Repository-Version enthält `vendor/`, `composer.lock` und den synchronisierten FG Core. Auf der WordPress-Zielseite ist kein Composer-Befehl erforderlich.
@@ -83,6 +90,30 @@ composer.json
 composer.lock
 vendor/
 includes/fg-core/
+```
+
+
+## Hintergrund-Worker und Shared Hosting
+
+FG Backup Pro prüft bei jedem neuen Auftrag, ob eine ausführbare PHP-CLI-Version und eine erlaubte Prozessfunktion verfügbar sind. Unterstützt werden `proc_open`, `exec` und `shell_exec`. Der zuerst erfolgreich gestartete Weg wird im Jobstatus gespeichert. Der Worker läuft unabhängig von der geöffneten WordPress-Adminseite und führt die vorhandenen Schritte für Datenbankexport, Dateiscan, Archivierung, Validierung und Remote-Upload weiter. Lange Aufträge werden ungefähr alle fünf Minuten geordnet an einen neuen CLI-Prozess übergeben. Dadurch kann ein Hosting-Limit von beispielsweise 30 Minuten pro PHP-Prozess einen mehrstündigen Dropbox-Upload nicht mehr vollständig beenden.
+
+Auf Plesk-Systemen werden neben dem PHP-Binary des aktuellen Prozesses auch typische Pfade unter `/opt/plesk/php/*/bin/php` geprüft. Bei einer abweichenden Installation kann der CLI-Pfad in `wp-config.php` fest vorgegeben werden:
+
+```php
+define('FG_BACKUP_PHP_CLI', '/opt/plesk/php/8.3/bin/php');
+```
+
+Kann kein CLI-Worker gestartet werden, versucht das Plugin kleine Aufträge genau einmal über den vorhandenen HTTP-/WP-Cron-Weg. Ein großer ZIP-Auftrag wird in diesem begrenzten Fallback nicht blind gestartet, sondern mit einer konkreten Meldung beendet. Das ist keine ZIP-Format- oder Dateigrößenbegrenzung: Im CLI-Modus gibt es kein künstliches 65-MB-Limit.
+
+Jeder Auftrag schreibt ein begrenztes Log unter dem verwalteten Speicherpfad in `fg-backup-pro/logs/<job-id>.log`. Verwaiste temporäre Jobordner und alte Logs werden automatisch bereinigt.
+
+## Zusätzliche Ausschlüsse
+
+Zusätzliche Ausschlüsse werden zeilenweise und relativ zu `ABSPATH` verarbeitet. Doppelte Slashes und Backslashes werden normalisiert; führende und abschließende Slashes sind zulässig. Pfade mit `..`, URL-Schemata oder Zielen außerhalb des WordPress-Roots werden verworfen. Beispiele:
+
+```text
+/assets/video/
+/temp/
 ```
 
 
@@ -132,10 +163,12 @@ Mehrere Ziele können gleichzeitig aktiviert werden. FG Backup Pro erstellt und 
 
 Die aktiven Remote-Ziele und die gemeinsame lokale Aufbewahrung werden zentral im Tab **Einstellungen** gewählt. Die einzelnen Remote-Tabs enthalten nur noch Verbindung, Zielpfad, Aufbewahrung und Dateiverwaltung.
 
-Eine lokale Datei wird nur gelöscht, wenn:
+Im normalen Ablauf wird eine lokale Datei nur gelöscht, wenn:
 
 1. alle aktivierten Remote-Ziele erfolgreich abgeschlossen wurden und
 2. die gemeinsame Option „Backup nach erfolgreichen Remote-Uploads lokal behalten“ deaktiviert ist.
+
+Bei einem automatischen Remote-Fehler bleibt das bereits verifizierte lokale Backup zur Sicherheit erhalten. Bricht der Benutzer den laufenden Remote-Upload bewusst ab, wird das für diesen Auftrag erzeugte lokale Backup samt JSON-Manifest entfernt, sofern „lokal behalten“ deaktiviert ist.
 
 Fehlschläge einzelner Remote-Ziele werden in der Laufhistorie getrennt angezeigt. Andere aktivierte Ziele werden trotzdem weiterverarbeitet.
 
@@ -192,7 +225,7 @@ Nicht über den Relay übertragen werden:
 - Dropbox-Dateilisten
 - Backup-Dateien
 
-Die Kundenwebsite tauscht den Code selbst gegen Tokens und speichert diese verschlüsselt. Uploads erfolgen direkt von WordPress zu Dropbox. Zielordner werden innerhalb des App-Ordners automatisch angelegt. Große Dateien werden über Dropbox Upload Sessions in Blöcken übertragen.
+Die Kundenwebsite tauscht den Code selbst gegen Tokens und speichert diese verschlüsselt. Uploads erfolgen direkt von WordPress zu Dropbox. Zielordner werden innerhalb des App-Ordners automatisch angelegt. Große Dateien werden über Dropbox Upload Sessions in 32-MiB-Blöcken übertragen. Der bestätigte Offset wird nach jedem Block gespeichert. Nach einem Verbindungs- oder Worker-Abbruch kann der Upload ab diesem Stand fortgesetzt und bei abweichendem Dropbox-Offset automatisch synchronisiert werden.
 
 Standard-Relay:
 

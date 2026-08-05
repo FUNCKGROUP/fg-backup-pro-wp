@@ -584,18 +584,86 @@ class FgBackup_Backup {
             }
         }
 
-        $custom = (string) get_option('fg_backup_exclusions', '');
-        if ($custom !== '') {
-            $patterns = preg_split('/\r\n|\r|\n/', $custom);
-            foreach ((array) $patterns as $pattern) {
-                $pattern = trim(wp_normalize_path($pattern));
-                if ($pattern !== '' && strpos($relative, $pattern) !== false) {
-                    return true;
-                }
+        foreach (self::normalized_custom_exclusions() as $excluded) {
+            $candidate = wp_normalize_path($normalized);
+            $candidate_real = realpath($path);
+            if ($candidate_real !== false) {
+                $candidate = wp_normalize_path($candidate_real);
+            }
+
+            if ($candidate === $excluded || strpos(trailingslashit($candidate), trailingslashit($excluded)) === 0) {
+                return true;
             }
         }
 
         return false;
+    }
+
+    public static function normalized_custom_exclusions() {
+        $custom = (string) get_option('fg_backup_exclusions', '');
+        if ($custom === '') {
+            return [];
+        }
+
+        $absolute_root = realpath(ABSPATH);
+        if ($absolute_root === false) {
+            $absolute_root = ABSPATH;
+        }
+        $absolute_root = untrailingslashit(self::collapse_path(wp_normalize_path($absolute_root)));
+        if ($absolute_root === '') {
+            return [];
+        }
+
+        $exclusions = [];
+        $patterns = preg_split('/\r\n|\r|\n/', $custom);
+        foreach ((array) $patterns as $pattern) {
+            $pattern = trim(str_replace('\\', '/', (string) $pattern));
+            if ($pattern === '' || strpos($pattern, "\0") !== false || strpos($pattern, '://') !== false) {
+                continue;
+            }
+
+            $pattern = self::collapse_path($pattern);
+            $segments = [];
+            foreach (explode('/', trim($pattern, '/')) as $segment) {
+                if ($segment === '' || $segment === '.') {
+                    continue;
+                }
+                if ($segment === '..') {
+                    $segments = [];
+                    break;
+                }
+                $segments[] = $segment;
+            }
+            if (!$segments) {
+                continue;
+            }
+
+            $candidate = $absolute_root . '/' . implode('/', $segments);
+            $real = realpath($candidate);
+            if ($real !== false) {
+                $candidate = wp_normalize_path($real);
+            } else {
+                $candidate = self::collapse_path(wp_normalize_path($candidate));
+            }
+            $candidate = untrailingslashit($candidate);
+
+            if ($candidate === '' || ($candidate !== $absolute_root && strpos(trailingslashit($candidate), trailingslashit($absolute_root)) !== 0)) {
+                continue;
+            }
+
+            $exclusions[$candidate] = $candidate;
+        }
+
+        return array_values($exclusions);
+    }
+
+    private static function collapse_path($path) {
+        $path = str_replace('\\', '/', (string) $path);
+        if (preg_match('/^[A-Za-z]:\//', $path)) {
+            $prefix = substr($path, 0, 3);
+            return $prefix . preg_replace('#/+#', '/', substr($path, 3));
+        }
+        return preg_replace('#/+#', '/', $path);
     }
 
     public static function initialize_archive($format, $archive_path) {
@@ -677,6 +745,189 @@ class FgBackup_Backup {
         }
 
         $zip->close();
+    }
+
+
+    public static function create_zip_from_manifest($manifest_path, $zip_path, $source_root, $db_file, array $metadata, callable $should_cancel = null, callable $progress_callback = null) {
+        if (!self::supports_zip()) {
+            throw new RuntimeException(__('Die PHP-Erweiterung ZipArchive ist nicht verfügbar.', 'fg-backup-pro'));
+        }
+
+        self::cleanup_zip_parts($zip_path, true);
+        $zip = new ZipArchive();
+        $opened = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        if ($opened !== true) {
+            throw new RuntimeException(__('Das ZIP-Archiv konnte nicht erstellt werden.', 'fg-backup-pro'));
+        }
+
+        $handle = null;
+        $source_root_real = '';
+        $added = 0;
+        $processed_bytes = 0;
+        $last_progress = 0.0;
+
+        try {
+            $handle = self::open_manifest($manifest_path, 0);
+            $source_root_real = realpath($source_root);
+            if ($source_root_real === false) {
+                throw new RuntimeException(__('Das Quellverzeichnis für das ZIP wurde nicht gefunden.', 'fg-backup-pro'));
+            }
+            $source_root_real = trailingslashit(wp_normalize_path($source_root_real));
+
+            while (($line = fgets($handle)) !== false) {
+                if ($should_cancel && call_user_func($should_cancel)) {
+                    fclose($handle);
+                    if (method_exists($zip, 'unchangeAll')) {
+                        @$zip->unchangeAll();
+                    }
+                    @$zip->close();
+                    self::cleanup_zip_parts($zip_path, true);
+                    return false;
+                }
+
+                $entry = json_decode($line, true);
+                if (!is_array($entry) || empty($entry['path']) || empty($entry['name'])) {
+                    continue;
+                }
+
+                $path = (string) $entry['path'];
+                $real = realpath($path);
+                if ($real === false || is_link($path) || !is_file($real) || !is_readable($real)) {
+                    continue;
+                }
+                $real = wp_normalize_path($real);
+                if (strpos($real, $source_root_real) !== 0) {
+                    continue;
+                }
+
+                $archive_name = ltrim(str_replace('\\', '/', (string) $entry['name']), '/');
+                if ($archive_name === '' || strpos('/' . $archive_name . '/', '/../') !== false) {
+                    continue;
+                }
+
+                // Do not force FL_OPEN_FILE_NOW here. Keeping thousands of source files
+                // explicitly open can exhaust file descriptors on shared hosting. libzip
+                // receives the source path and reads it while the archive is closed once.
+                $added_ok = $zip->addFile($real, $archive_name);
+                if (!$added_ok) {
+                    throw new RuntimeException(sprintf(
+                        __('Datei konnte nicht zum Archiv hinzugefügt werden: %s', 'fg-backup-pro'),
+                        $archive_name
+                    ));
+                }
+
+                if (self::should_store_without_compression($archive_name) && method_exists($zip, 'setCompressionName') && defined('ZipArchive::CM_STORE')) {
+                    @$zip->setCompressionName($archive_name, ZipArchive::CM_STORE);
+                }
+
+                $added++;
+                $processed_bytes += isset($entry['size']) ? max(0, (int) $entry['size']) : max(0, (int) @filesize($real));
+                if ($progress_callback && ((microtime(true) - $last_progress) >= 1.0 || ($added % 100) === 0)) {
+                    call_user_func($progress_callback, 'adding', $added, $processed_bytes, 0.0);
+                    $last_progress = microtime(true);
+                }
+            }
+            fclose($handle);
+
+            if (!$zip->addFile($db_file, 'database/database.sql')) {
+                throw new RuntimeException(__('Die Datenbank konnte nicht zum ZIP-Archiv hinzugefügt werden.', 'fg-backup-pro'));
+            }
+
+            if (isset($metadata['backup']) && is_array($metadata['backup'])) {
+                $metadata['backup']['file_count'] = $added;
+                $metadata['backup']['uncompressed_size'] = $processed_bytes;
+            }
+            $metadata_json = wp_json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+            if (!is_string($metadata_json) || !$zip->addFromString('fg-backup.json', $metadata_json . "\n")) {
+                throw new RuntimeException(__('Die Backup-Metadaten konnten nicht geschrieben werden.', 'fg-backup-pro'));
+            }
+
+            $cancelled = false;
+            if (method_exists($zip, 'registerCancelCallback') && $should_cancel) {
+                @$zip->registerCancelCallback(static function () use ($should_cancel, &$cancelled) {
+                    try {
+                        $cancelled = (bool) call_user_func($should_cancel);
+                    } catch (Throwable $exception) {
+                        $cancelled = true;
+                    }
+                    return $cancelled ? -1 : 0;
+                });
+            }
+
+            if (method_exists($zip, 'registerProgressCallback') && $progress_callback) {
+                @$zip->registerProgressCallback(0.01, static function ($ratio) use ($progress_callback, $added, $processed_bytes) {
+                    try {
+                        call_user_func($progress_callback, 'closing', $added, $processed_bytes, max(0.0, min(1.0, (float) $ratio)));
+                    } catch (Throwable $exception) {
+                        // libzip callbacks must not leak exceptions into C code.
+                    }
+                });
+            }
+
+            if ($progress_callback) {
+                call_user_func($progress_callback, 'closing', $added, $processed_bytes, 0.0);
+            }
+            $closed = $zip->close();
+            if ($cancelled || ($should_cancel && call_user_func($should_cancel))) {
+                self::cleanup_zip_parts($zip_path, true);
+                return false;
+            }
+            if (!$closed || !is_file($zip_path) || filesize($zip_path) <= 0) {
+                $message = method_exists($zip, 'getStatusString') ? (string) $zip->getStatusString() : '';
+                self::cleanup_zip_parts($zip_path, true);
+                throw new RuntimeException($message !== ''
+                    ? sprintf(__('Das ZIP-Archiv konnte nicht geschlossen werden: %s', 'fg-backup-pro'), $message)
+                    : __('Das ZIP-Archiv konnte nicht geschlossen werden.', 'fg-backup-pro'));
+            }
+
+            self::cleanup_zip_parts($zip_path, false);
+            if ($progress_callback) {
+                call_user_func($progress_callback, 'closing', $added, $processed_bytes, 1.0);
+            }
+
+            return [
+                'added' => $added,
+                'bytes' => $processed_bytes,
+                'progress_callback' => method_exists($zip, 'registerProgressCallback'),
+                'cancel_callback' => method_exists($zip, 'registerCancelCallback'),
+            ];
+        } catch (Throwable $exception) {
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+            if (method_exists($zip, 'unchangeAll')) {
+                @$zip->unchangeAll();
+            }
+            @$zip->close();
+            self::cleanup_zip_parts($zip_path, true);
+            throw $exception;
+        }
+    }
+
+    public static function cleanup_zip_parts($zip_path, $remove_archive = false) {
+        $zip_path = wp_normalize_path((string) $zip_path);
+        if ($zip_path === '') {
+            return;
+        }
+
+        $matches = glob($zip_path . '.*');
+        foreach ((array) $matches as $match) {
+            if (is_file($match)) {
+                @unlink($match);
+            }
+        }
+
+        if ($remove_archive && is_file($zip_path)) {
+            @unlink($zip_path);
+        }
+    }
+
+    private static function should_store_without_compression($archive_name) {
+        $extension = strtolower(pathinfo((string) $archive_name, PATHINFO_EXTENSION));
+        return in_array($extension, [
+            '7z', 'avi', 'bz2', 'gif', 'gz', 'jpeg', 'jpg', 'm4a', 'mkv', 'mov', 'mp3',
+            'mp4', 'ogg', 'pdf', 'png', 'rar', 'tgz', 'webm', 'webp', 'zip',
+        ], true);
     }
 
     private static function initialize_tar($tar_path) {

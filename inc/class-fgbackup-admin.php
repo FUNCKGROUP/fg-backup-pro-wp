@@ -12,6 +12,7 @@ class FgBackup_Admin {
         add_action('wp_ajax_fg_backup_start', [__CLASS__, 'ajax_start']);
         add_action('wp_ajax_fg_backup_status', [__CLASS__, 'ajax_status']);
         add_action('wp_ajax_fg_backup_cancel', [__CLASS__, 'ajax_cancel']);
+        add_action('wp_ajax_fg_backup_cleanup_job', [__CLASS__, 'ajax_cleanup_job']);
         add_action('wp_ajax_fg_backup_health_check', [__CLASS__, 'ajax_health_check']);
         add_action('wp_ajax_fg_backup_storage_test', [__CLASS__, 'ajax_storage_test']);
         add_action('wp_ajax_fg_backup_validate', [__CLASS__, 'ajax_validate']);
@@ -1236,6 +1237,15 @@ class FgBackup_Admin {
             'size' => !empty($job['size']) ? size_format((int) $job['size'], 2) : '',
             'started_at' => isset($job['started_at']) ? (int) $job['started_at'] : 0,
             'finished_at' => isset($job['finished_at']) ? (int) $job['finished_at'] : 0,
+            'updated_at' => isset($job['updated_at']) ? (int) $job['updated_at'] : 0,
+            'updated_label' => !empty($job['updated_at']) ? wp_date('d.m.Y H:i:s', (int) $job['updated_at']) : '',
+            'execution_mode' => isset($job['execution_mode']) ? sanitize_key($job['execution_mode']) : '',
+            'file_count' => isset($job['file_count']) ? (int) $job['file_count'] : 0,
+            'file_bytes' => isset($job['file_bytes']) ? (int) $job['file_bytes'] : 0,
+            'file_bytes_label' => !empty($job['file_bytes']) ? size_format((int) $job['file_bytes'], 1) : '',
+            'archived_files' => isset($job['archived_files']) ? (int) $job['archived_files'] : 0,
+            'archived_bytes' => isset($job['archived_bytes']) ? (int) $job['archived_bytes'] : 0,
+            'worker_error' => isset($job['worker_error']) ? sanitize_text_field($job['worker_error']) : '',
             'remote_status' => isset($job['remote_status']) ? $job['remote_status'] : 'disabled',
             'remote_path' => isset($job['remote_path']) ? $job['remote_path'] : '',
             'remote_results' => isset($job['remote_results']) ? (array) $job['remote_results'] : [],
@@ -1264,6 +1274,21 @@ class FgBackup_Admin {
             'stage' => $job['stage'],
             'detail' => $job['detail'],
             'progress' => isset($job['progress']) ? (int) $job['progress'] : 0,
+        ]);
+    }
+
+    public static function ajax_cleanup_job() {
+        self::assert_ajax_admin();
+        $job_id = isset($_POST['job_id']) ? sanitize_key(wp_unslash($_POST['job_id'])) : '';
+        $job = FgBackup_Async::cleanup_job($job_id);
+
+        if (is_wp_error($job)) {
+            wp_send_json_error(['message' => $job->get_error_message()]);
+        }
+
+        wp_send_json_success([
+            'message' => __('Temporäre Jobdaten und Laufzeitstatus wurden bereinigt.', 'fg-backup-pro'),
+            'status' => isset($job['status']) ? $job['status'] : '',
         ]);
     }
 

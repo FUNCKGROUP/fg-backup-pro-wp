@@ -7,7 +7,9 @@ class FgBackup_Dropbox {
     const CONTENT_URL = 'https://content.dropboxapi.com/2/';
     const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
     const AUTHORIZE_URL = 'https://www.dropbox.com/oauth2/authorize';
-    const CHUNK_SIZE = 8388608;
+    const CHUNK_SIZE = 33554432;
+    const CHUNKS_PER_STEP = 2;
+    const MAX_CHUNK_RETRIES = 3;
     const PENDING_OPTION = 'fg_backup_dropbox_oauth_pending';
     const OAUTH_ERROR_OPTION = 'fg_backup_dropbox_oauth_error';
 
@@ -56,7 +58,7 @@ class FgBackup_Dropbox {
         return rtrim($value, '/') ?: '';
     }
 
-    public static function resolved_remote_dir(array $settings = null) {
+    public static function resolved_remote_dir(?array $settings = null) {
         $settings = $settings ?: self::settings();
         $host = sanitize_title(preg_replace('/^www\./i', '', (string) wp_parse_url(home_url('/'), PHP_URL_HOST)));
         $site = sanitize_title((string) get_bloginfo('name'));
@@ -322,26 +324,117 @@ class FgBackup_Dropbox {
 
         $chunks = 0;
         try {
-            while ($offset < $total && $chunks < 4) {
+            while ($offset < $total && $chunks < self::CHUNKS_PER_STEP) {
                 if (is_callable($cancel_callback) && call_user_func($cancel_callback)) {
                     break;
                 }
-                $length = min(self::CHUNK_SIZE, $total - $offset);
-                $data = fread($handle, $length);
-                if (!is_string($data) || $data === '') {
-                    throw new RuntimeException(__('Ein Dropbox-Datenblock konnte nicht gelesen werden.', 'fg-backup-pro'));
+
+                $chunk_offset = $offset;
+                $length = min(self::CHUNK_SIZE, $total - $chunk_offset);
+                $data = self::read_exact($handle, $length);
+                if (strlen($data) !== $length) {
+                    throw new RuntimeException(__('Ein Dropbox-Datenblock konnte nicht vollständig gelesen werden.', 'fg-backup-pro'));
                 }
-                self::content_request('files/upload_session/append_v2', [
-                    'cursor' => [
-                        'session_id' => $session_id,
-                        'offset' => $offset,
-                    ],
-                    'close' => false,
-                ], $data, [200]);
-                $offset += strlen($data);
-                $chunks++;
-                if (is_callable($progress_callback)) {
-                    call_user_func($progress_callback, $offset, $total);
+
+                $retry = 0;
+                $resynchronized = false;
+                while (true) {
+                    if (is_callable($cancel_callback) && call_user_func($cancel_callback)) {
+                        break 2;
+                    }
+
+                    try {
+                        $response = self::content_request('files/upload_session/append_v2', [
+                            'cursor' => [
+                                'session_id' => $session_id,
+                                'offset' => $chunk_offset,
+                            ],
+                            'close' => false,
+                        ], $data, [200, 409, 429, 500, 502, 503, 504]);
+                    } catch (Throwable $exception) {
+                        $retry++;
+                        if ($retry >= self::MAX_CHUNK_RETRIES) {
+                            throw $exception;
+                        }
+                        if (is_callable($progress_callback)) {
+                            call_user_func($progress_callback, $offset, $total, [
+                                'event' => 'retry',
+                                'attempt' => $retry,
+                                'message' => $exception->getMessage(),
+                            ]);
+                        }
+                        sleep(self::retry_delay(null, $retry));
+                        continue;
+                    }
+
+                    $status = isset($response['status']) ? (int) $response['status'] : 0;
+                    if ($status === 200) {
+                        $offset = $chunk_offset + strlen($data);
+                        $chunks++;
+                        if (is_callable($progress_callback)) {
+                            call_user_func($progress_callback, $offset, $total, [
+                                'event' => 'chunk',
+                                'bytes' => strlen($data),
+                            ]);
+                        }
+                        break;
+                    }
+
+                    if ($status === 409) {
+                        $correct_offset = self::extract_correct_offset(isset($response['body']) ? $response['body'] : '');
+                        if ($correct_offset !== null) {
+                            if ($correct_offset < 0 || $correct_offset > $total) {
+                                throw new RuntimeException(__('Dropbox meldet einen ungültigen Upload-Offset.', 'fg-backup-pro'));
+                            }
+
+                            if ($correct_offset === $chunk_offset) {
+                                $retry++;
+                                if ($retry >= self::MAX_CHUNK_RETRIES) {
+                                    throw new RuntimeException(__('Dropbox konnte den Upload-Offset nicht synchronisieren.', 'fg-backup-pro'));
+                                }
+                                sleep(self::retry_delay($response, $retry));
+                                continue;
+                            }
+
+                            $offset = $correct_offset;
+                            if (fseek($handle, $offset) !== 0) {
+                                throw new RuntimeException(__('Die lokale Datei konnte nach der Dropbox-Synchronisierung nicht neu positioniert werden.', 'fg-backup-pro'));
+                            }
+                            if (is_callable($progress_callback)) {
+                                call_user_func($progress_callback, $offset, $total, [
+                                    'event' => 'resync',
+                                    'previous_offset' => $chunk_offset,
+                                ]);
+                            }
+                            $resynchronized = true;
+                            break;
+                        }
+
+                        throw new RuntimeException(self::response_error_message(
+                            $response,
+                            __('Die Dropbox-Upload-Session konnte nicht fortgesetzt werden.', 'fg-backup-pro')
+                        ));
+                    }
+
+                    $retry++;
+                    if ($retry >= self::MAX_CHUNK_RETRIES) {
+                        throw new RuntimeException(self::response_error_message(
+                            $response,
+                            __('Dropbox hat den Datenblock nach mehreren Versuchen nicht angenommen.', 'fg-backup-pro')
+                        ));
+                    }
+                    if (is_callable($progress_callback)) {
+                        call_user_func($progress_callback, $offset, $total, [
+                            'event' => 'retry',
+                            'attempt' => $retry,
+                            'http_status' => $status,
+                        ]);
+                    }
+                    sleep(self::retry_delay($response, $retry));
+                }
+
+                if ($resynchronized) {
+                    continue;
                 }
             }
         } finally {
@@ -362,6 +455,13 @@ class FgBackup_Dropbox {
         if ($session_id === '' || $remote_path === '') {
             throw new RuntimeException(__('Die Dropbox-Upload-Daten fehlen.', 'fg-backup-pro'));
         }
+
+        // Ein vorheriger Finish-Aufruf kann serverseitig erfolgreich gewesen sein,
+        // obwohl der Worker vor dem Empfang der Antwort beendet wurde.
+        if (self::remote_file_matches($remote_path, $total)) {
+            return $remote_path;
+        }
+
         $response = self::content_request('files/upload_session/finish', [
             'cursor' => [
                 'session_id' => $session_id,
@@ -375,7 +475,18 @@ class FgBackup_Dropbox {
                 'mute' => true,
                 'strict_conflict' => true,
             ],
-        ], '', [200]);
+        ], '', [200, 409]);
+
+        if ((int) $response['status'] === 409) {
+            if (self::remote_file_matches($remote_path, $total)) {
+                return $remote_path;
+            }
+            throw new RuntimeException(self::response_error_message(
+                $response,
+                __('Die Dropbox-Upload-Session konnte nicht finalisiert werden.', 'fg-backup-pro')
+            ));
+        }
+
         $metadata = self::decode_json($response['body']);
         if (!isset($metadata['size']) || (int) $metadata['size'] !== $total) {
             throw new RuntimeException(__('Die finalisierte Dropbox-Datei konnte nicht bestätigt werden.', 'fg-backup-pro'));
@@ -826,6 +937,78 @@ class FgBackup_Dropbox {
         }
 
         return self::is_backup_file_name(substr($name, 0, -5));
+    }
+
+    private static function read_exact($handle, $length) {
+        $remaining = max(0, (int) $length);
+        $data = '';
+        while ($remaining > 0 && !feof($handle)) {
+            $part = fread($handle, $remaining);
+            if (!is_string($part) || $part === '') {
+                break;
+            }
+            $data .= $part;
+            $remaining -= strlen($part);
+        }
+        return $data;
+    }
+
+    private static function remote_file_matches($path, $expected_size) {
+        try {
+            $response = self::rpc_request('files/get_metadata', ['path' => (string) $path], [200, 409]);
+            if ((int) $response['status'] !== 200) {
+                return false;
+            }
+            $metadata = self::decode_json($response['body']);
+            return isset($metadata['.tag'], $metadata['size'])
+                && $metadata['.tag'] === 'file'
+                && (int) $metadata['size'] === (int) $expected_size;
+        } catch (Throwable $exception) {
+            return false;
+        }
+    }
+
+    private static function extract_correct_offset($body) {
+        $data = self::decode_json($body);
+        $stack = [$data];
+        while ($stack) {
+            $value = array_pop($stack);
+            if (!is_array($value)) {
+                continue;
+            }
+            if (array_key_exists('correct_offset', $value) && is_numeric($value['correct_offset'])) {
+                return (int) $value['correct_offset'];
+            }
+            foreach ($value as $child) {
+                if (is_array($child)) {
+                    $stack[] = $child;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static function retry_delay($response, $attempt) {
+        $retry_after = 0;
+        if (is_array($response) && !empty($response['headers'])) {
+            $headers = $response['headers'];
+            if (is_object($headers) && method_exists($headers, 'offsetGet')) {
+                $retry_after = (int) $headers->offsetGet('retry-after');
+            } elseif (is_array($headers)) {
+                $retry_after = isset($headers['retry-after']) ? (int) $headers['retry-after'] : 0;
+            }
+        }
+        if ($retry_after > 0) {
+            return min(30, $retry_after);
+        }
+        $delays = [2, 5, 10];
+        return $delays[max(0, min(count($delays) - 1, (int) $attempt - 1))];
+    }
+
+    private static function response_error_message(array $response, $fallback) {
+        $status = isset($response['status']) ? (int) $response['status'] : 0;
+        $detail = self::dropbox_error(isset($response['body']) ? $response['body'] : '');
+        return sprintf('%s HTTP %d%s', $fallback, $status, $detail !== '' ? ': ' . $detail : '');
     }
 
     private static function rpc_request($endpoint, $payload, array $allowed_statuses) {

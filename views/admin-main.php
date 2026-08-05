@@ -100,6 +100,19 @@ $delete_failed = isset($_GET['fg_backup_delete_failed']) ? max(0, (int) $_GET['f
             <span class="fg-backup-percent"><?php echo $active_job ? esc_html((int) $active_job['progress'] . ' %') : ''; ?></span>
         </div>
         <p class="fg-backup-detail"><?php echo $active_job && !empty($active_job['detail']) ? esc_html($active_job['detail']) : ''; ?></p>
+        <div class="fg-backup-runtime-meta">
+            <span class="fg-backup-last-activity">
+                <?php echo $active_job && !empty($active_job['updated_at'])
+                    ? esc_html(sprintf(__('Letzte Aktivität: %s', 'fg-backup-pro'), wp_date('d.m.Y H:i:s', (int) $active_job['updated_at'])))
+                    : ''; ?>
+            </span>
+            <span class="fg-backup-execution-mode">
+                <?php echo $active_job && !empty($active_job['execution_mode'])
+                    ? esc_html($active_job['execution_mode'] === 'cli' ? __('PHP-CLI-Worker', 'fg-backup-pro') : __('HTTP-/WP-Cron-Fallback', 'fg-backup-pro'))
+                    : ''; ?>
+            </span>
+            <button type="button" class="button-link" id="fg-backup-cleanup-job" hidden><?php esc_html_e('Temporäre Jobdaten aufräumen', 'fg-backup-pro'); ?></button>
+        </div>
     </div>
 </div>
 
