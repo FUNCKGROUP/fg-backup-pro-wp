@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.4.3 – 05.08.2026
+
+- CLI-PHP-Dateien werden vor dem Einsatz tatsächlich ausgeführt und auf CLI-SAPI, PHP 7.4 oder neuer sowie `mysqli` geprüft
+- typische versionierte CLI-Pfade für Shared Hosting werden zusätzlich erkannt; CGI- und FPM-Binärdateien bleiben ausgeschlossen
+- ein von `proc_open`, `exec` oder `shell_exec` zurückgegebener PID gilt nicht mehr allein als erfolgreicher Worker-Start
+- neuer Start-Handshake über Job-Token, Worker-Generation und Heartbeat; erst danach wird der Auftrag im CLI-Modus geführt
+- stirbt der gestartete Prozess vor dem WordPress- beziehungsweise Plugin-Bootstrap, fällt ein noch nicht begonnener Auftrag automatisch auf WP-Cron zurück
+- Datenbank-Backups auf Shared Hosting scheitern dadurch nicht mehr sofort mit „PHP-CLI-Worker ist nicht mehr aktiv“
+- die letzte aussagekräftige Zeile aus `job.log` wird bei einem nicht bestätigten Start in die Diagnose übernommen
+- verspätete, nicht bestätigte Prozesse werden durch Token-Wechsel daran gehindert, einen bereits zurückgesetzten Job später zu übernehmen
+- Worker-Übergaben und Dropbox-Wiederaufnahmen werden ebenfalls erst nach einem erfolgreichen Handshake akzeptiert
+- Statusänderungen des bestätigten Workers werden vom startenden HTTP-Prozess nicht mehr mit einem älteren Optionsstand überschrieben
+- optionaler Schalter `FG_BACKUP_DISABLE_CLI_WORKER` für Hostings, auf denen bewusst nur der begrenzte HTTP-/WP-Cron-Fallback verwendet werden soll
+
 ## 2.4.2 – 01.08.2026
 
 - große Dropbox-Dateien werden weiterhin über Upload Sessions übertragen, der bestätigte Offset wird jetzt nach jedem erfolgreichen Datenblock dauerhaft gespeichert

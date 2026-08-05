@@ -2,11 +2,11 @@
 
 FG Backup Pro erstellt strukturell geprüfte WordPress-Sicherungen an einem geschützten, frei wählbaren lokalen Speicherort und überträgt sie optional zu mehreren Remote-Zielen. Die Verwaltung erfolgt als eigener Eintrag **FG Backup Pro** innerhalb von FG Core.
 
-## Version 2.4.2
+## Version 2.4.3
 
 - vollständige Backups als ZIP oder TGZ
 - Datenbank-Backups als SQL, SQL.GZ oder SQL.ZIP
-- unabhängiger PHP-CLI-Worker für lange Backup-Schritte mit sicherem HTTP-/WP-Cron-Fallback
+- unabhängiger PHP-CLI-Worker für lange Backup-Schritte mit bestätigtem Start und sicherem HTTP-/WP-Cron-Fallback
 - geordnete Worker-Übergabe bei langen Läufen, damit Prozesslimits des Hostings nicht den gesamten Auftrag beenden
 - ZIP-Vollbackups werden einmal geöffnet, vollständig befüllt und einmal geschlossen
 - echter Fortschritt nach Dateien, Bytes und – sofern von libzip unterstützt – beim finalen ZIP-Schreibvorgang
@@ -95,13 +95,23 @@ includes/fg-core/
 
 ## Hintergrund-Worker und Shared Hosting
 
-FG Backup Pro prüft bei jedem neuen Auftrag, ob eine ausführbare PHP-CLI-Version und eine erlaubte Prozessfunktion verfügbar sind. Unterstützt werden `proc_open`, `exec` und `shell_exec`. Der zuerst erfolgreich gestartete Weg wird im Jobstatus gespeichert. Der Worker läuft unabhängig von der geöffneten WordPress-Adminseite und führt die vorhandenen Schritte für Datenbankexport, Dateiscan, Archivierung, Validierung und Remote-Upload weiter. Lange Aufträge werden ungefähr alle fünf Minuten geordnet an einen neuen CLI-Prozess übergeben. Dadurch kann ein Hosting-Limit von beispielsweise 30 Minuten pro PHP-Prozess einen mehrstündigen Dropbox-Upload nicht mehr vollständig beenden.
+FG Backup Pro prüft bei jedem neuen Auftrag, ob eine tatsächlich startfähige PHP-CLI-Version und eine erlaubte Prozessfunktion verfügbar sind. Unterstützt werden `proc_open`, `exec` und `shell_exec`. Mögliche PHP-Dateien werden mit einem kurzen CLI-Test auf `PHP_SAPI`, Mindestversion und `mysqli` geprüft. Ein von der Shell zurückgelieferter Prozess-PID gilt noch nicht als erfolgreicher Start: Der neue Prozess muss WordPress laden, den Job-Token bestätigen und einen Heartbeat mit neuer Worker-Generation speichern. Erfolgt diese Bestätigung nicht, wird der vermeintliche CLI-Start verworfen und ein noch nicht begonnener kleiner Auftrag automatisch über WP-Cron fortgesetzt.
+
+Der bestätigte Worker läuft unabhängig von der geöffneten WordPress-Adminseite und führt die vorhandenen Schritte für Datenbankexport, Dateiscan, Archivierung, Validierung und Remote-Upload weiter. Lange Aufträge werden ungefähr alle fünf Minuten geordnet an einen neuen CLI-Prozess übergeben. Auch diese Übergabe gilt erst nach erfolgreichem Handshake als abgeschlossen. Dadurch kann ein Hosting-Limit von beispielsweise 30 Minuten pro PHP-Prozess einen mehrstündigen Dropbox-Upload nicht mehr vollständig beenden.
 
 Auf Plesk-Systemen werden neben dem PHP-Binary des aktuellen Prozesses auch typische Pfade unter `/opt/plesk/php/*/bin/php` geprüft. Bei einer abweichenden Installation kann der CLI-Pfad in `wp-config.php` fest vorgegeben werden:
 
 ```php
 define('FG_BACKUP_PHP_CLI', '/opt/plesk/php/8.3/bin/php');
 ```
+
+Der CLI-Worker kann auf einem Hosting bewusst deaktiviert werden. Kleine Datenbank- und andere begrenzte Aufträge verwenden dann direkt den HTTP-/WP-Cron-Fallback:
+
+```php
+define('FG_BACKUP_DISABLE_CLI_WORKER', true);
+```
+
+Für große ZIP-Aufträge bleibt weiterhin ein bestätigter CLI-Worker erforderlich; die Konstante ist daher keine Lösung für sehr große Vollbackups.
 
 Kann kein CLI-Worker gestartet werden, versucht das Plugin kleine Aufträge genau einmal über den vorhandenen HTTP-/WP-Cron-Weg. Ein großer ZIP-Auftrag wird in diesem begrenzten Fallback nicht blind gestartet, sondern mit einer konkreten Meldung beendet. Das ist keine ZIP-Format- oder Dateigrößenbegrenzung: Im CLI-Modus gibt es kein künstliches 65-MB-Limit.
 

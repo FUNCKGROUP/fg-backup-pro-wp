@@ -8,6 +8,7 @@ class FgBackup_Async {
     const LOCK_OPTION = 'fg_backup_active_job';
     const PROCESS_LOCK_TTL = 10 * MINUTE_IN_SECONDS;
     const WORKER_HEARTBEAT_TTL = 15 * MINUTE_IN_SECONDS;
+    const CLI_WORKER_START_TIMEOUT_SECONDS = 8;
     const CLI_WORKER_SLICE_SECONDS = 5 * MINUTE_IN_SECONDS;
     const CLI_WORKER_MAX_HANDOFFS = 500;
     const CLI_WORKER_RECOVERY_LIMIT = 3;
@@ -43,7 +44,10 @@ class FgBackup_Async {
         $first_worker = empty($job['worker_started_at']);
         $job['execution_mode'] = 'cli';
         $job['worker_pid'] = function_exists('getmypid') ? (int) getmypid() : 0;
+        $job['worker_php'] = defined('PHP_BINARY') ? (string) PHP_BINARY : '';
         $job['worker_started_at'] = time();
+        $job['worker_start_confirmed_at'] = time();
+        $job['worker_handoff_pending'] = false;
         $job['worker_slice_started_at'] = time();
         $job['worker_generation'] = isset($job['worker_generation']) ? (int) $job['worker_generation'] + 1 : 1;
         $job['worker_heartbeat_at'] = time();
@@ -153,6 +157,8 @@ class FgBackup_Async {
             'worker_method' => '',
             'worker_php' => '',
             'worker_started_at' => 0,
+            'worker_start_confirmed_at' => 0,
+            'worker_launch_requested_at' => 0,
             'worker_heartbeat_at' => 0,
             'worker_error' => '',
             'worker_generation' => 0,
@@ -202,36 +208,20 @@ class FgBackup_Async {
             'origin' => $origin,
         ]);
 
-        $launched = FgBackup_Worker::launch($job_id, $job['worker_token']);
+        $launched = self::start_cli_worker($job, 'initial');
         if (!is_wp_error($launched)) {
-            $fresh_job = self::get_status_raw($job_id);
-            if (is_array($fresh_job)) {
-                $job = $fresh_job;
-            }
-            $job['execution_mode'] = 'cli';
-            $job['worker_pid'] = !empty($job['worker_pid']) ? (int) $job['worker_pid'] : (isset($launched['pid']) ? (int) $launched['pid'] : 0);
-            $job['worker_method'] = isset($launched['method']) ? (string) $launched['method'] : '';
-            $job['worker_php'] = isset($launched['php_binary']) ? (string) $launched['php_binary'] : '';
-            if (empty($job['worker_started_at'])) {
-                $job['stage'] = __('Hintergrund-Worker startet', 'fg-backup-pro');
-                $job['detail'] = __('Das Backup wird von einem separaten PHP-CLI-Prozess ausgeführt.', 'fg-backup-pro');
-            }
-            $job['updated_at'] = time();
-            update_option(self::option_name($job_id), $job, false);
-            self::log_message($job_id, 'CLI-Worker angefordert', $launched);
             return $job_id;
         }
 
-        $job['execution_mode'] = 'http';
-        $job['worker_error'] = $launched->get_error_message();
-        $job['stage'] = __('HTTP-Fallback startet', 'fg-backup-pro');
-        $job['detail'] = sprintf(
-            __('Kein CLI-Worker verfügbar: %s Der Job wird genau einmal über WP-Cron versucht.', 'fg-backup-pro'),
-            $job['worker_error']
-        );
-        $job['updated_at'] = time();
-        update_option(self::option_name($job_id), $job, false);
-        self::log_message($job_id, 'CLI-Worker nicht verfügbar; HTTP-Fallback', ['error' => $job['worker_error']]);
+        $fresh_job = self::get_status_fresh($job_id);
+        if (is_array($fresh_job)) {
+            $job = $fresh_job;
+        }
+        if (in_array(isset($job['status']) ? $job['status'] : '', ['completed', 'completed_with_errors', 'failed', 'canceled'], true)) {
+            return $job_id;
+        }
+
+        self::activate_http_fallback($job, $launched->get_error_message());
 
         $scheduled = self::schedule_job($job_id);
         if (is_wp_error($scheduled)) {
@@ -400,7 +390,44 @@ class FgBackup_Async {
         }
 
         $execution_mode = isset($job['execution_mode']) ? (string) $job['execution_mode'] : 'http';
-        if ($execution_mode === 'cli' || $execution_mode === 'starting') {
+        if ($execution_mode === 'starting') {
+            $heartbeat = !empty($job['worker_heartbeat_at']) ? (int) $job['worker_heartbeat_at'] : 0;
+            $generation = !empty($job['worker_generation']) ? (int) $job['worker_generation'] : 0;
+            if ($generation > 0 && $heartbeat >= time() - self::WORKER_HEARTBEAT_TTL) {
+                // Der Worker hat bereits bestätigt. Nicht aus dem Polling-Request
+                // zurückschreiben, damit kein neuerer Worker-Status überschrieben wird.
+                return $job;
+            }
+
+            $launch_requested = !empty($job['worker_launch_requested_at'])
+                ? (int) $job['worker_launch_requested_at']
+                : (int) $job['started_at'];
+            if ($launch_requested >= time() - FgBackup_Worker::START_GRACE_SECONDS) {
+                return $job;
+            }
+
+            if ($job['status'] === 'cancel_requested') {
+                self::cancel_job($job);
+                return self::get_status_raw($job_id);
+            }
+
+            if (self::can_fallback_after_unconfirmed_cli_start($job)) {
+                $reason = !empty($job['worker_error'])
+                    ? (string) $job['worker_error']
+                    : self::worker_start_failure_message($job_id, []);
+                self::activate_http_fallback($job, $reason);
+                $scheduled = self::schedule_job($job_id);
+                if (!is_wp_error($scheduled)) {
+                    self::dispatch_cron();
+                }
+                return self::get_status_fresh($job_id);
+            }
+
+            self::fail_job($job, __('Der PHP-CLI-Worker hat seinen Start nicht bestätigt. Der Backup-Job wurde beendet und temporäre Dateien wurden bereinigt.', 'fg-backup-pro'));
+            return self::get_status_raw($job_id);
+        }
+
+        if ($execution_mode === 'cli') {
             $running = FgBackup_Worker::is_process_running(isset($job['worker_pid']) ? (int) $job['worker_pid'] : 0);
             if ($running === true) {
                 return $job;
@@ -448,46 +475,324 @@ class FgBackup_Async {
         return self::get_status_raw($job_id);
     }
 
+    private static function start_cli_worker(array &$job, $purpose = 'initial') {
+        $job_id = isset($job['id']) ? sanitize_key($job['id']) : '';
+        if ($job_id === '') {
+            return new WP_Error('fg_backup_worker_job_missing', __('Der Backup-Job besitzt keine gültige ID.', 'fg-backup-pro'));
+        }
+
+        $previous_generation = isset($job['worker_generation']) ? (int) $job['worker_generation'] : 0;
+        $previous_mode = isset($job['execution_mode']) ? (string) $job['execution_mode'] : 'http';
+        $previous_pid = isset($job['worker_pid']) ? (int) $job['worker_pid'] : 0;
+        $previous_method = isset($job['worker_method']) ? (string) $job['worker_method'] : '';
+        $previous_php = isset($job['worker_php']) ? (string) $job['worker_php'] : '';
+        $previous_started_at = isset($job['worker_started_at']) ? (int) $job['worker_started_at'] : 0;
+        $previous_heartbeat = isset($job['worker_heartbeat_at']) ? (int) $job['worker_heartbeat_at'] : 0;
+        $launch_requested_at = time();
+        $launch_token = bin2hex(random_bytes(24));
+
+        $job['worker_token'] = $launch_token;
+        $job['execution_mode'] = 'starting';
+        $job['worker_pid'] = 0;
+        $job['worker_method'] = '';
+        $job['worker_php'] = '';
+        $job['worker_error'] = '';
+        $job['worker_launch_requested_at'] = $launch_requested_at;
+        $job['updated_at'] = $launch_requested_at;
+        if ($purpose === 'initial') {
+            $job['stage'] = __('Hintergrund-Worker wird geprüft', 'fg-backup-pro');
+            $job['detail'] = __('Der PHP-CLI-Prozess muss seinen Start bestätigen. Andernfalls wird automatisch der sichere WP-Cron-Fallback verwendet.', 'fg-backup-pro');
+        }
+        update_option(self::option_name($job_id), $job, false);
+
+        $launched = FgBackup_Worker::launch($job_id, $launch_token);
+        if (is_wp_error($launched)) {
+            $fresh = self::get_status_fresh($job_id);
+            if (is_array($fresh)) {
+                $job = $fresh;
+            }
+            $job['worker_token'] = bin2hex(random_bytes(24));
+            $job['worker_error'] = $launched->get_error_message();
+            $job['execution_mode'] = $previous_mode;
+            $job['worker_pid'] = $previous_pid;
+            $job['worker_method'] = $previous_method;
+            $job['worker_php'] = $previous_php;
+            $job['worker_started_at'] = $previous_started_at;
+            $job['worker_heartbeat_at'] = $previous_heartbeat;
+            $job['updated_at'] = time();
+            update_option(self::option_name($job_id), $job, false);
+            self::log_message($job_id, 'CLI-Worker konnte nicht angefordert werden', [
+                'purpose' => $purpose,
+                'error' => $job['worker_error'],
+            ]);
+            return $launched;
+        }
+
+        self::log_message($job_id, 'CLI-Worker-Prozess angefordert', array_merge([
+            'purpose' => $purpose,
+        ], $launched));
+
+        $confirmed = self::wait_for_cli_worker_start(
+            $job_id,
+            $launch_token,
+            $previous_generation,
+            $launch_requested_at,
+            isset($launched['pid']) ? (int) $launched['pid'] : 0
+        );
+
+        if (is_array($confirmed)) {
+            // Ab hier schreibt ausschließlich der bestätigte Worker den Jobstatus weiter.
+            // Ein erneutes update_option() im startenden HTTP-/Vorgängerprozess könnte
+            // sonst einen bereits fortgeschrittenen Status des Workers überschreiben.
+            $job = $confirmed;
+            self::log_message($job_id, 'CLI-Worker-Start bestätigt', [
+                'purpose' => $purpose,
+                'pid' => isset($job['worker_pid']) ? (int) $job['worker_pid'] : 0,
+                'generation' => isset($job['worker_generation']) ? (int) $job['worker_generation'] : 0,
+                'php_binary' => isset($job['worker_php']) ? (string) $job['worker_php'] : '',
+            ]);
+            return $launched;
+        }
+
+        $fresh = self::get_status_fresh($job_id);
+        if (is_array($fresh)) {
+            $fresh_generation = isset($fresh['worker_generation']) ? (int) $fresh['worker_generation'] : 0;
+            $fresh_heartbeat = isset($fresh['worker_heartbeat_at']) ? (int) $fresh['worker_heartbeat_at'] : 0;
+            $fresh_mode = isset($fresh['execution_mode']) ? (string) $fresh['execution_mode'] : '';
+            if (
+                $fresh_generation > $previous_generation
+                && $fresh_heartbeat >= ($launch_requested_at - 1)
+                && $fresh_mode === 'cli'
+            ) {
+                $job = $fresh;
+                self::log_message($job_id, 'CLI-Worker-Start verspätet bestätigt', [
+                    'purpose' => $purpose,
+                    'pid' => isset($job['worker_pid']) ? (int) $job['worker_pid'] : 0,
+                    'generation' => $fresh_generation,
+                ]);
+                return $launched;
+            }
+            $job = $fresh;
+        }
+
+        $failure = self::worker_start_failure_message($job_id, $launched);
+
+        // Ein verspätet startender Prozess besitzt danach ein ungültiges Token und
+        // kann den auf HTTP zurückgesetzten beziehungsweise weiterlaufenden Job nicht übernehmen.
+        $job['worker_token'] = bin2hex(random_bytes(24));
+        $job['worker_error'] = $failure;
+        $job['execution_mode'] = $previous_mode;
+        $job['worker_pid'] = $previous_pid;
+        $job['worker_method'] = $previous_method;
+        $job['worker_php'] = $previous_php;
+        $job['worker_started_at'] = $previous_started_at;
+        $job['worker_heartbeat_at'] = $purpose === 'initial' ? 0 : max($previous_heartbeat, time());
+        $job['updated_at'] = time();
+        update_option(self::option_name($job_id), $job, false);
+        self::log_message($job_id, 'CLI-Worker-Start nicht bestätigt', [
+            'purpose' => $purpose,
+            'error' => $failure,
+            'launcher_pid' => isset($launched['pid']) ? (int) $launched['pid'] : 0,
+        ]);
+
+        return new WP_Error('fg_backup_worker_not_confirmed', $failure);
+    }
+
+    private static function wait_for_cli_worker_start($job_id, $token, $previous_generation, $launch_requested_at, $launcher_pid) {
+        $deadline = microtime(true) + self::CLI_WORKER_START_TIMEOUT_SECONDS;
+        $process_dead_since = 0.0;
+
+        do {
+            $current = self::get_status_fresh($job_id);
+            if (!is_array($current)) {
+                return false;
+            }
+
+            if (!empty($current['worker_token']) && !hash_equals((string) $current['worker_token'], (string) $token)) {
+                return false;
+            }
+
+            $generation = isset($current['worker_generation']) ? (int) $current['worker_generation'] : 0;
+            $heartbeat = isset($current['worker_heartbeat_at']) ? (int) $current['worker_heartbeat_at'] : 0;
+            $mode = isset($current['execution_mode']) ? (string) $current['execution_mode'] : '';
+            $status = isset($current['status']) ? (string) $current['status'] : '';
+
+            if (
+                $generation > (int) $previous_generation
+                && $heartbeat >= ((int) $launch_requested_at - 1)
+                && ($mode === 'cli' || in_array($status, ['completed', 'completed_with_errors', 'failed', 'canceled'], true))
+            ) {
+                return $current;
+            }
+
+            $running = FgBackup_Worker::is_process_running($launcher_pid);
+            if ($running === false) {
+                if ($process_dead_since <= 0) {
+                    $process_dead_since = microtime(true);
+                } elseif ((microtime(true) - $process_dead_since) >= 1.0) {
+                    break;
+                }
+            } else {
+                $process_dead_since = 0.0;
+            }
+
+            usleep(100000);
+        } while (microtime(true) < $deadline);
+
+        return false;
+    }
+
+    private static function activate_http_fallback(array &$job, $reason) {
+        $job_id = isset($job['id']) ? sanitize_key($job['id']) : '';
+        if ($job_id === '') {
+            return;
+        }
+
+        $job['worker_token'] = bin2hex(random_bytes(24));
+        $job['execution_mode'] = 'http';
+        $job['worker_pid'] = 0;
+        $job['worker_method'] = '';
+        $job['worker_php'] = '';
+        $job['worker_heartbeat_at'] = 0;
+        $job['worker_error'] = trim((string) $reason);
+        $job['stage'] = __('HTTP-Fallback startet', 'fg-backup-pro');
+        $job['detail'] = sprintf(
+            __('Der CLI-Start wurde nicht bestätigt: %s Der Job wird genau einmal über WP-Cron fortgesetzt.', 'fg-backup-pro'),
+            $job['worker_error']
+        );
+        $job['updated_at'] = time();
+        delete_option(self::process_lock_option_name($job_id));
+        update_option(self::option_name($job_id), $job, false);
+        self::log_message($job_id, 'HTTP-Fallback nach nicht bestätigtem CLI-Start aktiviert', [
+            'error' => $job['worker_error'],
+        ]);
+    }
+
+    private static function can_fallback_after_unconfirmed_cli_start(array $job) {
+        return empty($job['worker_generation'])
+            && (isset($job['step']) ? (string) $job['step'] : 'init') === 'init'
+            && empty($job['attempt_signature'])
+            && empty($job['processing_started_at']);
+    }
+
+    private static function worker_start_failure_message($job_id, array $launched) {
+        $message = __('Der gestartete PHP-CLI-Prozess hat WordPress und den Backup-Worker nicht bestätigt.', 'fg-backup-pro');
+        if (!empty($launched['php_binary'])) {
+            $message .= ' ' . sprintf(
+                __('Verwendete PHP-Datei: %s.', 'fg-backup-pro'),
+                (string) $launched['php_binary']
+            );
+        }
+
+        $tail = self::read_worker_log_tail($job_id);
+        if ($tail !== '') {
+            $message .= ' ' . sprintf(__('Letzter Eintrag im job.log: %s', 'fg-backup-pro'), $tail);
+        } else {
+            $message .= ' ' . __('Der Prozess wurde vom Hosting beendet oder lieferte vor dem WordPress-Start keine Fehlermeldung.', 'fg-backup-pro');
+        }
+
+        return $message;
+    }
+
+    private static function read_worker_log_tail($job_id) {
+        $path = FgBackup_Storage::get_job_log_path($job_id);
+        if ($path === '' || !is_file($path) || !is_readable($path)) {
+            return '';
+        }
+
+        $size = @filesize($path);
+        if ($size === false || $size <= 0) {
+            return '';
+        }
+
+        $length = min(8192, (int) $size);
+        $handle = @fopen($path, 'rb');
+        if (!$handle) {
+            return '';
+        }
+        if ($size > $length) {
+            @fseek($handle, -1 * $length, SEEK_END);
+        }
+        $tail = stream_get_contents($handle);
+        fclose($handle);
+        if (!is_string($tail) || trim($tail) === '') {
+            return '';
+        }
+
+        $lines = preg_split('/\r\n|\r|\n/', trim($tail));
+        if (!is_array($lines)) {
+            return '';
+        }
+        $lines = array_values(array_filter(array_map('trim', $lines), 'strlen'));
+        if (!$lines) {
+            return '';
+        }
+
+        $skip_fragments = [
+            'Backup-Job angelegt',
+            'CLI-Worker-Prozess angefordert',
+            'CLI-Worker angefordert',
+            'HTTP-Fallback nach nicht bestätigtem CLI-Start aktiviert',
+        ];
+
+        foreach (array_reverse($lines) as $candidate) {
+            $skip = false;
+            foreach ($skip_fragments as $fragment) {
+                if (strpos((string) $candidate, $fragment) !== false) {
+                    $skip = true;
+                    break;
+                }
+            }
+            if ($skip) {
+                continue;
+            }
+
+            $line = sanitize_text_field((string) $candidate);
+            if (function_exists('mb_substr')) {
+                return mb_substr($line, 0, 600);
+            }
+            return substr($line, 0, 600);
+        }
+
+        return '';
+    }
+
     private static function handoff_cli_worker(array $job) {
         $job_id = isset($job['id']) ? sanitize_key($job['id']) : '';
-        $token = isset($job['worker_token']) ? (string) $job['worker_token'] : '';
         $handoffs = isset($job['worker_handoff_count']) ? (int) $job['worker_handoff_count'] : 0;
-        if ($job_id === '' || $token === '' || $handoffs >= self::CLI_WORKER_MAX_HANDOFFS) {
+        if ($job_id === '' || $handoffs >= self::CLI_WORKER_MAX_HANDOFFS) {
             return false;
         }
 
         $job['worker_handoff_pending'] = true;
+        $job['worker_handoff_count'] = $handoffs + 1;
         $job['worker_heartbeat_at'] = time();
         $job['updated_at'] = time();
         update_option(self::option_name($job_id), $job, false);
 
-        $launched = FgBackup_Worker::launch($job_id, $token);
+        $launched = self::start_cli_worker($job, 'handoff');
         if (is_wp_error($launched)) {
+            $fresh = self::get_status_fresh($job_id);
+            if (is_array($fresh)) {
+                $job = $fresh;
+            }
             $job['worker_handoff_pending'] = false;
+            $job['worker_handoff_count'] = $handoffs;
+            $job['execution_mode'] = 'cli';
             $job['worker_error'] = $launched->get_error_message();
+            $job['worker_heartbeat_at'] = time();
             $job['updated_at'] = time();
             update_option(self::option_name($job_id), $job, false);
-            self::log_message($job_id, 'CLI-Worker-Übergabe fehlgeschlagen', ['error' => $job['worker_error']]);
+            self::log_message($job_id, 'CLI-Worker-Übergabe fehlgeschlagen; aktueller Worker läuft weiter', [
+                'error' => $job['worker_error'],
+            ]);
             return false;
         }
 
-        $fresh = self::get_status_raw($job_id);
-        if (!is_array($fresh)) {
-            return false;
-        }
-        $fresh['worker_handoff_pending'] = false;
-        $fresh['worker_handoff_count'] = $handoffs + 1;
-        $fresh['worker_pid'] = !empty($fresh['worker_pid']) && (int) $fresh['worker_pid'] !== (int) $job['worker_pid']
-            ? (int) $fresh['worker_pid']
-            : (isset($launched['pid']) ? (int) $launched['pid'] : 0);
-        $fresh['worker_method'] = isset($launched['method']) ? (string) $launched['method'] : '';
-        $fresh['worker_php'] = isset($launched['php_binary']) ? (string) $launched['php_binary'] : '';
-        $fresh['worker_heartbeat_at'] = time();
-        $fresh['updated_at'] = time();
-        update_option(self::option_name($job_id), $fresh, false);
-        self::log_message($job_id, 'Nächster CLI-Worker gestartet', [
-            'pid' => $fresh['worker_pid'],
-            'handoff' => $fresh['worker_handoff_count'],
+        self::log_message($job_id, 'Nächster CLI-Worker bestätigt', [
+            'pid' => isset($job['worker_pid']) ? (int) $job['worker_pid'] : 0,
+            'handoff' => isset($job['worker_handoff_count']) ? (int) $job['worker_handoff_count'] : ($handoffs + 1),
+            'generation' => isset($job['worker_generation']) ? (int) $job['worker_generation'] : 0,
         ]);
         return true;
     }
@@ -509,9 +814,8 @@ class FgBackup_Async {
 
     private static function recover_cli_worker(array $job) {
         $job_id = isset($job['id']) ? sanitize_key($job['id']) : '';
-        $token = isset($job['worker_token']) ? (string) $job['worker_token'] : '';
         $recoveries = isset($job['worker_recovery_count']) ? (int) $job['worker_recovery_count'] : 0;
-        if ($job_id === '' || $token === '' || $recoveries >= self::CLI_WORKER_RECOVERY_LIMIT) {
+        if ($job_id === '' || $recoveries >= self::CLI_WORKER_RECOVERY_LIMIT) {
             return false;
         }
 
@@ -530,27 +834,18 @@ class FgBackup_Async {
         );
         update_option(self::option_name($job_id), $job, false);
 
-        $launched = FgBackup_Worker::launch($job_id, $token);
+        $launched = self::start_cli_worker($job, 'dropbox_recovery');
         if (is_wp_error($launched)) {
-            self::log_message($job_id, 'Dropbox-Worker-Wiederaufnahme fehlgeschlagen', ['error' => $launched->get_error_message()]);
+            self::log_message($job_id, 'Dropbox-Worker-Wiederaufnahme fehlgeschlagen', [
+                'error' => $launched->get_error_message(),
+            ]);
             return false;
         }
 
-        $fresh = self::get_status_raw($job_id);
-        if (!is_array($fresh)) {
-            return false;
-        }
-        $fresh['execution_mode'] = 'cli';
-        $fresh['worker_pid'] = !empty($fresh['worker_pid']) ? (int) $fresh['worker_pid'] : (isset($launched['pid']) ? (int) $launched['pid'] : 0);
-        $fresh['worker_method'] = isset($launched['method']) ? (string) $launched['method'] : '';
-        $fresh['worker_php'] = isset($launched['php_binary']) ? (string) $launched['php_binary'] : '';
-        $fresh['worker_heartbeat_at'] = time();
-        $fresh['updated_at'] = time();
-        update_option(self::option_name($job_id), $fresh, false);
         self::log_message($job_id, 'Dropbox-Upload nach Worker-Verlust fortgesetzt', [
-            'pid' => $fresh['worker_pid'],
-            'recovery' => $fresh['worker_recovery_count'],
-            'offset' => isset($fresh['remote_state']['offset']) ? (int) $fresh['remote_state']['offset'] : 0,
+            'pid' => isset($job['worker_pid']) ? (int) $job['worker_pid'] : 0,
+            'recovery' => isset($job['worker_recovery_count']) ? (int) $job['worker_recovery_count'] : 0,
+            'offset' => isset($job['remote_state']['offset']) ? (int) $job['remote_state']['offset'] : 0,
         ]);
         return true;
     }
@@ -1654,7 +1949,20 @@ class FgBackup_Async {
 
     private static function job_process_is_active(array $job) {
         $mode = isset($job['execution_mode']) ? (string) $job['execution_mode'] : 'http';
-        if ($mode === 'cli' || $mode === 'starting') {
+        if ($mode === 'starting') {
+            $generation = isset($job['worker_generation']) ? (int) $job['worker_generation'] : 0;
+            $heartbeat = isset($job['worker_heartbeat_at']) ? (int) $job['worker_heartbeat_at'] : 0;
+            if ($generation > 0 && $heartbeat >= time() - self::WORKER_HEARTBEAT_TTL) {
+                return true;
+            }
+
+            $launch_requested = isset($job['worker_launch_requested_at'])
+                ? (int) $job['worker_launch_requested_at']
+                : (isset($job['started_at']) ? (int) $job['started_at'] : 0);
+            return $launch_requested >= time() - FgBackup_Worker::START_GRACE_SECONDS;
+        }
+
+        if ($mode === 'cli') {
             $running = FgBackup_Worker::is_process_running(isset($job['worker_pid']) ? (int) $job['worker_pid'] : 0);
             if ($running === true) {
                 return true;
@@ -1806,6 +2114,12 @@ class FgBackup_Async {
 
     private static function get_status_raw($job_id) {
         return get_option(self::option_name(sanitize_key($job_id)), false);
+    }
+
+    private static function get_status_fresh($job_id) {
+        $option = self::option_name(sanitize_key($job_id));
+        wp_cache_delete($option, 'options');
+        return get_option($option, false);
     }
 
     private static function schedule_job($job_id) {
